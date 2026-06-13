@@ -1,0 +1,19 @@
+<View>
+  <Header value="Revisão de e-mail — $email_agent_id"/>
+  <Text name="meta" value="De: $from | Assunto: $subject | Data: $date | Pasta: $mailbox"/>
+  <Text name="suggestion" value="Sugerido: $suggested_category (spam=$spam_score, imp=$importance_score) — $reason"/>
+  <Text name="body" value="$text"/>
+  <Choices name="category" toName="body" choice="single" showInLine="false">
+    <Choice value="spam_suspeito"/>
+    <Choice value="documento"/>
+    <Choice value="documento_fiscal"/>
+    <Choice value="marketing"/>
+    <Choice value="noticia"/>
+    <Choice value="promocao"/>
+    <Choice value="aguardando_resposta"/>
+    <Choice value="revisar"/>
+    <Choice value="importante_p0"/>
+    <Choice value="importante_p1"/>
+    <Choice value="ignorar"/>
+  </Choices>
+</View>

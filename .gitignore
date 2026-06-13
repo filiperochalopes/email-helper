@@ -1,0 +1,29 @@
+# Ambiente / segredos
+.env
+.env.*
+!.env.example
+secrets/
+!secrets/accounts.example.yml
+!secrets/rules.example.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Dados gerados
+data/models/*.joblib
+data/exports/*.json
+*.log
+
+# macOS / IDE
+.DS_Store
+.idea/
+.vscode/
