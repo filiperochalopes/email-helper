@@ -55,3 +55,13 @@ def remove_label(account: EmailAccount, provider_message_id: str, label_name: st
     service.users().messages().modify(
         userId="me", id=provider_message_id, body={"removeLabelIds": [labels[label_name]]}
     ).execute()
+
+
+def trash(account: EmailAccount, provider_message_id: str) -> None:
+    """Move a mensagem para a Lixeira do Gmail (recuperável ~30 dias).
+
+    Só é chamado pelo comando CLI `delete`, com confirmação humana — nunca pelo
+    pipeline automático."""
+    service = get_service(account)
+    service.users().messages().trash(userId="me", id=provider_message_id).execute()
+    log.info("gmail_trashed", account=account.email_address, msg=provider_message_id)

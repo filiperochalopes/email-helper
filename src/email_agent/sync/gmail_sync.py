@@ -25,11 +25,7 @@ CURSOR_MAILBOX = "_gmail_history"
 def sync_account(account_id: int, bootstrap: bool = False) -> list[int]:
     with db_session() as session:
         account = session.get(EmailAccount, account_id)
-    try:
-        service = get_service(account)
-    except RuntimeError as exc:
-        log.error("gmail_auth_failed", account=account.email_address, error=str(exc))
-        return []
+    service = get_service(account)
 
     with db_session() as session:
         cursor = session.execute(

@@ -3,6 +3,7 @@
 Tokens ficam em GMAIL_TOKEN_STORAGE_PATH/<email>.json. A autorização inicial
 é feita FORA do Docker (precisa de navegador):  email-agent gmail auth CONTA
 """
+import logging
 import os
 
 from google.auth.exceptions import RefreshError
@@ -28,7 +29,14 @@ def run_oauth_flow(email_address: str) -> None:
     """Fluxo interativo (navegador). Rodar no host, não no container."""
     settings = get_settings()
     flow = InstalledAppFlow.from_client_secrets_file(settings.gmail_oauth_client_secret_file, SCOPES)
-    creds = flow.run_local_server(port=0, prompt="consent", access_type="offline")
+    oauth_logger = logging.getLogger("google_auth_oauthlib.flow")
+    previous_level = oauth_logger.level
+    try:
+        # run_local_server registra e imprime o mesmo prompt; mantém apenas a saída no terminal.
+        oauth_logger.setLevel(logging.WARNING)
+        creds = flow.run_local_server(port=0, prompt="consent", access_type="offline")
+    finally:
+        oauth_logger.setLevel(previous_level)
     os.makedirs(settings.gmail_token_storage_path, exist_ok=True)
     with open(token_path(email_address), "w") as f:
         f.write(creds.to_json())
@@ -42,12 +50,14 @@ def get_credentials(account: EmailAccount) -> Credentials | None:
         return None
     creds = Credentials.from_authorized_user_file(path, SCOPES)
     if creds.valid:
+        _mark_ok(account)
         return creds
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
             with open(path, "w") as f:
                 f.write(creds.to_json())
+            _mark_ok(account)
             return creds
         except RefreshError as exc:
             log.error("gmail_refresh_failed", account=account.email_address, error=str(exc))
@@ -55,6 +65,16 @@ def get_credentials(account: EmailAccount) -> Credentials | None:
             return None
     _mark_reauth(account)
     return None
+
+
+def _mark_ok(account: EmailAccount) -> None:
+    """Marca a conta como autenticada. É o caminho que conserta o auth_status
+    quando o `gmail auth` rodou no host e não conseguiu escrever no banco."""
+    with db_session() as session:
+        db_account = session.get(EmailAccount, account.id)
+        if db_account and db_account.auth_status != "ok":
+            db_account.auth_status = "ok"
+            log.info("gmail_auth_status_ok", account=account.email_address)
 
 
 def _mark_reauth(account: EmailAccount) -> None:

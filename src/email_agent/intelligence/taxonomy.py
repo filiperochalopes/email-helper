@@ -8,6 +8,7 @@ LABEL_DOCUMENTOS = "AI/Documentos"
 LABEL_FISCAL = "AI/Documentos/Fiscal"
 LABEL_MARKETING = "AI/Marketing"
 LABEL_REVISAR = "AI/Revisar"
+LABEL_LIXO_SUGERIDO = "AI/Lixo Sugerido"
 
 ALL_AI_LABELS = [
     LABEL_IMPORTANTE,
@@ -17,6 +18,7 @@ ALL_AI_LABELS = [
     LABEL_FISCAL,
     LABEL_MARKETING,
     LABEL_REVISAR,
+    LABEL_LIXO_SUGERIDO,
 ]
 
 # Categorias internas (treino, Label Studio, busca)

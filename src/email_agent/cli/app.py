@@ -4,6 +4,7 @@ Correção pontual:  email-agent feedback E-...  |  email-agent label E-...
 """
 import typer
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 from sqlalchemy import select
 
@@ -246,16 +247,59 @@ def search(
 
 
 @app.command()
-def show(email_agent_id: str):
-    """Mostra detalhes de uma mensagem."""
-    msg, cls = _load_message(email_agent_id)
-    _print_summary(msg, cls)
-    console.print((msg.normalized_text or "")[:2000])
+def show(
+    email_agent_ids: list[str] = typer.Argument(..., help="Um ou mais IDs (E-YYYYMMDD-NNNNNN)."),
+):
+    """Mostra detalhes de uma ou mais mensagens."""
+    for i, eid in enumerate(email_agent_ids):
+        if i:
+            console.rule(style="dim")
+        msg, cls = _load_message(eid)
+        _print_summary(msg, cls)
+        console.print((msg.normalized_text or "")[:2000])
+
+
+def _delete_impl(email_agent_ids: list[str]) -> None:
+    from email_agent.actions.delete_actions import trash_message
+
+    for eid in email_agent_ids:
+        msg, cls = _load_message(eid)
+        _print_summary(msg, cls)
+        body = (msg.normalized_text or msg.snippet or "(sem corpo)").strip()
+        console.print(Panel(body[:4000], title=f"Corpo — {eid}", border_style="dim"))
+        if not typer.confirm(f"Mover {eid} para a Lixeira?", default=False):
+            console.print(f"[yellow]Pulado:[/yellow] {eid}\n")
+            continue
+        status = trash_message(eid)
+        if status == "trashed":
+            console.print(f"[green]Movido para a Lixeira:[/green] {eid}\n")
+        elif status == "already":
+            console.print(f"[yellow]Já havia sido movido (idempotente):[/yellow] {eid}\n")
+        else:
+            console.print(f"[red]Falha:[/red] {eid} — {status}\n")
+
+
+@app.command()
+def delete(
+    email_agent_ids: list[str] = typer.Argument(..., help="Um ou mais IDs (E-YYYYMMDD-NNNNNN)."),
+):
+    """Move e-mail(s) para a Lixeira do provedor — mostra o corpo e confirma 1 a 1.
+
+    Ação não-destrutiva (recuperável na Lixeira) e registrada em email_action_log."""
+    _delete_impl(email_agent_ids)
+
+
+@app.command()
+def rm(
+    email_agent_ids: list[str] = typer.Argument(..., help="Alias de `delete`."),
+):
+    """Alias de `delete`."""
+    _delete_impl(email_agent_ids)
 
 
 @app.command()
 def digest(send: bool = typer.Option(False, "--send", help="Enviar via WhatsApp")):
-    """Gera (e opcionalmente envia) o resumo matinal (1 a 3 mensagens)."""
+    """Gera (e opcionalmente envia) o resumo matinal (1 a 4 mensagens)."""
     from email_agent.digest.builder import build_digest
 
     digest_obj = build_digest()
@@ -328,11 +372,28 @@ def sync_once(account: str = typer.Option(..., "--account")):
     with db_session() as session:
         acc = session.execute(
             select(EmailAccount).where(EmailAccount.email_address == account)
-        ).scalar_one()
+        ).scalar_one_or_none()
+        if acc is None:
+            console.print(f"[red]Conta não cadastrada no banco:[/red] {account}")
+            console.print(
+                "Importe as contas declaradas em secrets/accounts.yml e tente novamente:\n"
+                "  [bold]docker compose exec app email-agent accounts import-yaml[/bold]\n"
+                f"  [bold]docker compose exec app email-agent sync once --account {account}[/bold]"
+            )
+            all_accs = session.execute(select(EmailAccount)).scalars().all()
+            if all_accs:
+                console.print("Contas atualmente cadastradas:")
+                for a in all_accs:
+                    console.print(f"  {a.email_address}")
+            raise typer.Exit(1)
         account_id, provider = acc.id, acc.provider
     from email_agent.workers.tasks_sync import sync_one_account
 
-    console.print(sync_one_account(account_id, provider, bootstrap=False))
+    try:
+        console.print(sync_one_account(account_id, provider, bootstrap=False))
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Falha ao sincronizar {account}:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
 
 @relabel_app.command("all")
@@ -475,17 +536,45 @@ def accounts_list():
 
 @gmail_app.command("auth")
 def gmail_auth(email: str):
-    """Fluxo OAuth interativo (rodar no HOST, fora do Docker — abre navegador)."""
+    """Fluxo OAuth interativo. RODAR NO HOST (precisa de navegador), não no container:
+
+        .venv/bin/email-agent gmail auth conta@gmail.com
+
+    No host, exporte as variáveis apontando para as portas/paths publicados:
+        DATABASE_URL=postgresql+psycopg://emailagent:emailagent@localhost:5433/emailagent
+        GMAIL_OAUTH_CLIENT_SECRET_FILE=secrets/gmail_client_secret.json
+        GMAIL_TOKEN_STORAGE_PATH=secrets/gmail_tokens
+    """
     from email_agent.connectors.gmail_client import run_oauth_flow
 
-    run_oauth_flow(email)
-    with db_session() as session:
-        acc = session.execute(
-            select(EmailAccount).where(EmailAccount.email_address == email)
-        ).scalar_one_or_none()
-        if acc:
-            acc.auth_status = "ok"
-    console.print(f"[green]OAuth concluído para {email}.[/green]")
+    run_oauth_flow(email)  # salva o token em GMAIL_TOKEN_STORAGE_PATH/<email>.json
+    console.print(f"[green]OAuth concluído para {email}.[/green] Token salvo.")
+
+    # auth_status no banco é best-effort: se o DB não estiver acessível do host
+    # (ex.: host 'postgres' não resolve fora do Docker), não perdemos o token — o
+    # próximo sync atualiza o status.
+    try:
+        with db_session() as session:
+            acc = session.execute(
+                select(EmailAccount).where(EmailAccount.email_address == email)
+            ).scalar_one_or_none()
+            if acc:
+                acc.auth_status = "ok"
+            else:
+                console.print(
+                    f"[yellow]A conta {email} ainda não está cadastrada no banco.[/yellow]\n"
+                    "Conclua com:\n"
+                    "  [bold]docker compose exec app email-agent accounts import-yaml[/bold]\n"
+                    f"  [bold]docker compose exec app email-agent sync once --account {email}[/bold]"
+                )
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[yellow]Token salvo.[/yellow] Não marquei auth_status=ok no banco a partir do "
+            f"host ({exc.__class__.__name__} — 'postgres' só resolve dentro do Docker).\n"
+            "Importe a declaração da conta e rode o sync no container:\n"
+            "  [bold]docker compose exec app email-agent accounts import-yaml[/bold]\n"
+            f"  [bold]docker compose exec app email-agent sync once --account {email}[/bold]"
+        )
 
 
 if __name__ == "__main__":

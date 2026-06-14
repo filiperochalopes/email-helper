@@ -5,14 +5,11 @@ ficam em email_rule. Para cada e-mail, carregamos as regras da conta (+ globais)
 fazemos UMA chamada ao LLM passando todas as regras numeradas. O LLM diz quais se
 aplicam e a prioridade resultante. O corpo nunca sai da máquina (Ollama local).
 """
-import json
-import re
-
-import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from email_agent.config import get_settings
+from email_agent.intelligence.ollama_client import generate_json
 from email_agent.logging_setup import get_logger
 from email_agent.models import EmailRule
 
@@ -63,17 +60,12 @@ def evaluate_rules_llm(account_email: str, subject: str, from_email: str, body: 
         rules_block=rules_block, from_email=from_email or "?",
         subject=subject or "(sem assunto)", body=(body or "")[:4000],
     )
-    try:
-        resp = httpx.post(
-            f"{settings.ollama_base_url}/api/generate",
-            json={"model": settings.ollama_model, "prompt": prompt, "stream": False,
-                  "format": "json", "options": {"temperature": 0.0}},
-            timeout=120,
-        )
-        resp.raise_for_status()
-        data = _parse_json(resp.json()["response"])
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError) as exc:
-        log.warning("rule_agent_failed", account=account_email, error=str(exc))
+    data = generate_json(
+        prompt, task="base", temperature=0.0,
+        trace_name="apply_rules",
+        trace_metadata={"account": account_email, "rules_count": len(rules)},
+    )
+    if not data:
         return []
 
     outcomes = []
@@ -95,10 +87,3 @@ def evaluate_rules_llm(account_email: str, subject: str, from_email: str, body: 
             }
         )
     return outcomes
-
-
-def _parse_json(text: str) -> dict:
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if not m:
-        raise ValueError(f"sem JSON: {text[:120]!r}")
-    return json.loads(m.group(0))

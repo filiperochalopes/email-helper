@@ -1,6 +1,10 @@
 x-app-common: &app-common
   build: .
   env_file: .env
+  environment:
+    ACCOUNTS_FILE: /secrets/accounts.yml
+    GMAIL_OAUTH_CLIENT_SECRET_FILE: /secrets/gmail_client_secret.json
+    GMAIL_TOKEN_STORAGE_PATH: /secrets/gmail_tokens
   restart: unless-stopped
   volumes:
     - ./src:/app/src
