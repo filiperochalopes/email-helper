@@ -477,6 +477,15 @@ def review_export(
     console.print(f"[green]{n} tasks exportadas para {output}[/green]")
 
 
+@review_app.command("push")
+def review_push(limit: int = typer.Option(200, "--limit")):
+    """Envia mensagens pendentes ao Label Studio via API (pré-anotadas)."""
+    from email_agent.labelstudio.sync import push_pending_tasks
+
+    n = push_pending_tasks(limit=limit)
+    console.print(f"[green]{n} tasks enviadas ao Label Studio.[/green]")
+
+
 @train_app.command("import-labelstudio")
 def train_import(file: str):
     from email_agent.labelstudio.import_results import import_annotations
@@ -484,13 +493,68 @@ def train_import(file: str):
     console.print(f"[green]{import_annotations(file)} eventos de treino criados.[/green]")
 
 
+@train_app.command("pull-labelstudio")
+def train_pull():
+    """Puxa anotações concluídas do Label Studio via API e cria eventos de treino."""
+    from email_agent.labelstudio.sync import pull_annotations
+
+    console.print(f"[green]{pull_annotations()} eventos de treino criados.[/green]")
+
+
 @train_app.command("fit")
 def train_fit():
-    from email_agent.intelligence.training import derive_training_from_user_events, fit_spam_model
+    from email_agent.intelligence.training import derive_training_from_user_events, fit_models
 
     derived = derive_training_from_user_events()
-    trained = fit_spam_model()
-    console.print(f"Eventos implícitos derivados: {derived} | amostras treinadas: {trained}")
+    fit = fit_models()
+    if fit["skipped"]:
+        console.print(f"Eventos implícitos derivados: {derived} | [yellow]ainda sem amostras suficientes para treinar[/yellow]")
+    else:
+        console.print(
+            f"Eventos implícitos derivados: {derived} | "
+            f"spam: {fit['spam_samples']} amostras | categoria: {fit['category_samples']} amostras"
+        )
+
+
+@train_app.command("stats")
+def train_stats():
+    """Mostra o que já temos para treinar: rótulos manuais x automáticos x feedback."""
+    from email_agent.intelligence.training import training_stats
+
+    s = training_stats()
+    te = s["training_events"]
+
+    resumo = Table(title="Eventos de treino")
+    resumo.add_column("métrica"); resumo.add_column("valor", justify="right")
+    resumo.add_row("rótulos manuais (Label Studio + feedback CLI)", str(te["manual_labels"]))
+    resumo.add_row("rótulos implícitos (suas ações na caixa)", str(te["implicit_labels"]))
+    resumo.add_row("pendentes p/ treinar", str(te["pending_fit"]))
+    resumo.add_row("já consumidos pelo modelo", str(te["already_consumed"]))
+    resumo.add_row("mínimo p/ treinar (TRAINING_MIN_EVENTS)", str(te["min_events_to_fit"]))
+    console.print(resumo)
+
+    def _kv_table(title: str, data: dict, c1: str = "chave") -> None:
+        t = Table(title=title)
+        t.add_column(c1); t.add_column("qtd", justify="right")
+        for k, v in sorted(data.items(), key=lambda kv: -kv[1]):
+            t.add_row(k, str(v))
+        console.print(t)
+
+    _kv_table("Por fonte", te["by_source"], "fonte")
+    _kv_table("Por rótulo", te["by_label"], "rótulo")
+    _kv_table("Feedback por mudança de status (suas ações)", s["user_feedback_by_event"], "evento")
+    _kv_table("Classificações automáticas por categoria", s["auto_classifications"]["by_category"], "categoria")
+    _kv_table("Classificações automáticas por prioridade", s["auto_classifications"]["by_priority"], "prioridade")
+
+    def _estado(m):
+        return "[green]treinado[/green]" if m["trained"] else "[yellow]ainda não treinado[/yellow]"
+
+    spam, cat = s["spam_model"], s["category_model"]
+    console.print(f"Modelo sklearn spam/ham: {_estado(spam)} — {spam['path']}")
+    console.print(
+        f"Modelo sklearn categoria (multiclasse): {_estado(cat)} — "
+        f"dispensa LLM com confiança ≥ {cat['confidence_threshold']:.2f}"
+    )
 
 
 # ---------- accounts / gmail ----------

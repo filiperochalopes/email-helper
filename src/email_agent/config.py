@@ -35,10 +35,21 @@ class Settings(BaseSettings):
     cleanup_min_age_days: int = 90
 
     spam_model_path: str = "/data/models/spam_model.joblib"
+    # Modelo multiclasse de categoria (todas as labels, não só spam/ham).
+    category_model_path: str = "/data/models/category_model.joblib"
     training_min_events: int = 20
+    # Confiança mínima do modelo de categoria para a decisão dispensar a LLM.
+    category_confidence_threshold: float = 0.70
 
     label_studio_url: str = ""
     label_studio_api_key: str = ""
+    # Projeto no Label Studio: se 0, é resolvido/criado por título (label_studio_project_title).
+    label_studio_project_id: int = 0
+    label_studio_project_title: str = "email-agent"
+    # Classificações com confiança abaixo disto entram na fila de revisão do Label Studio.
+    label_studio_low_confidence: float = 0.6
+    # Quantos P0/P1 amostrar por sync para auditoria de prioridade (0 = nenhum).
+    label_studio_priority_sample: int = 10
 
     langfuse_base_url: str = ""
     langfuse_public_key: str = ""
@@ -49,6 +60,10 @@ class Settings(BaseSettings):
     @property
     def langfuse_enabled(self) -> bool:
         return bool(self.langfuse_public_key and self.langfuse_secret_key)
+
+    @property
+    def label_studio_enabled(self) -> bool:
+        return bool(self.label_studio_url and self.label_studio_api_key)
 
     def model_for(self, task: str = "base") -> str:
         """Modelo Ollama para uma task. 'reasoning' usa o modelo grande (com

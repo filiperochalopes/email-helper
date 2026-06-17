@@ -1,6 +1,7 @@
 from email_agent.intelligence.classifier import classify
 from email_agent.intelligence.taxonomy import (
     LABEL_FISCAL,
+    LABEL_FRAUDE,
     LABEL_MARKETING,
     LABEL_REVISAR,
     LABEL_SPAM_SUSPEITO,
@@ -84,3 +85,50 @@ def test_infra_alert_is_important():
         normalized_text="O backup falhou. Erro de certificado SSL. Ação necessária.",
     )
     assert r.priority in ("P0", "P1")
+
+
+def test_sender_spoof_registro_br_goes_to_spam():
+    # Caso real: display name "Registro BR" mas domínio é stetnet.com.br.
+    # Conteúdo parece importante (fatura/vencimento), mas impersonação vence.
+    r = _classify(
+        subject="Aviso de Vencimento - filipelopes.med.br",
+        normalized_text=(
+            "Aviso de Renovação Registro BR. A fatura referente à renovação do seu "
+            "domínio está prestes a vencer. Valor R$ 1.258,25. Após o vencimento o "
+            "domínio poderá ser cancelado."
+        ),
+        from_email="claudetebrasil@stetnet.com.br",
+        from_name="Registro BR",
+    )
+    assert r.category == "spam_suspeito"
+    assert LABEL_SPAM_SUSPEITO in r.suggested_labels
+    assert LABEL_FRAUDE in r.suggested_labels  # sub-label de impersonação
+
+
+def test_legit_brand_from_official_domain_not_spoofed():
+    r = _classify(
+        subject="Renovação do seu domínio",
+        normalized_text="A fatura referente ao seu domínio está disponível.",
+        from_email="noreply@registro.br",
+        from_name="Registro BR",
+    )
+    assert r.category != "spam_suspeito"
+
+
+def test_category_model_override_skips_uncertainty(tmp_path):
+    from email_agent.intelligence.category_model import CategoryModel
+
+    m = CategoryModel(path=str(tmp_path / "cat.joblib"))
+    m.partial_fit(
+        ["compre agora com desconto"] * 5 + ["segue a nota fiscal e o boleto"] * 5,
+        ["promocao"] * 5 + ["documento_fiscal"] * 5,
+        [1.0] * 10,
+    )
+    r = _classify(
+        subject="oferta",
+        normalized_text="compre agora com desconto imperdível",
+        category_model=m,
+        category_confidence_threshold=0.0,  # força o uso do modelo
+    )
+    assert r.category == "promocao"
+    assert r.confidence >= 0.5

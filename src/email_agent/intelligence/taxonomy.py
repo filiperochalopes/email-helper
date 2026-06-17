@@ -4,6 +4,7 @@
 LABEL_IMPORTANTE = "AI/Importante"
 LABEL_AGUARDANDO = "AI/Importante/Aguardando Resposta"
 LABEL_SPAM_SUSPEITO = "AI/Spam Suspeito"
+LABEL_FRAUDE = "AI/Spam Suspeito/Fraude"  # impersonação de remetente (sub-label)
 LABEL_DOCUMENTOS = "AI/Documentos"
 LABEL_FISCAL = "AI/Documentos/Fiscal"
 LABEL_MARKETING = "AI/Marketing"
@@ -14,6 +15,7 @@ ALL_AI_LABELS = [
     LABEL_IMPORTANTE,
     LABEL_AGUARDANDO,
     LABEL_SPAM_SUSPEITO,
+    LABEL_FRAUDE,
     LABEL_DOCUMENTOS,
     LABEL_FISCAL,
     LABEL_MARKETING,

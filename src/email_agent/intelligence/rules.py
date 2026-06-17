@@ -58,6 +58,43 @@ TRACKING_ACTION_PATTERNS = re.compile(
 )
 SUSPICIOUS_ATTACHMENT_EXT = (".exe", ".scr", ".js", ".vbs", ".bat", ".cmd", ".jar", ".iso", ".img", ".html")
 
+# Impersonação de remetente: marca citada no NOME EXIBIDO/ASSUNTO mas o domínio
+# de envio não bate com o(s) domínio(s) oficial(is). Lista conservadora e
+# facilmente extensível — só dispara quando a marca aparece e o domínio diverge,
+# então o risco de falso-positivo é baixo (marca + domínio legítimo = ok).
+IMPERSONATION_BRANDS: list[tuple[re.Pattern, set[str]]] = [
+    (re.compile(r"registro\.?\s*br|registro de dom[íi]nio|registrobr", re.I), {"registro.br", "nic.br"}),
+    (re.compile(r"\bnubank\b", re.I), {"nubank.com.br"}),
+    (re.compile(r"banco do brasil", re.I), {"bb.com.br"}),
+    (re.compile(r"\bita[uú]\b", re.I), {"itau.com.br", "itau-unibanco.com.br"}),
+    (re.compile(r"\bbradesco\b", re.I), {"bradesco.com.br"}),
+    (re.compile(r"\bsantander\b", re.I), {"santander.com.br"}),
+    (re.compile(r"caixa econ[oô]mica federal", re.I), {"caixa.gov.br"}),
+    (re.compile(r"\bcorreios\b", re.I), {"correios.com.br"}),
+    (re.compile(r"receita federal", re.I), {"gov.br", "receita.fazenda.gov.br"}),
+    (re.compile(r"mercado livre|mercado pago|mercadolivre", re.I), {"mercadolivre.com.br", "mercadopago.com.br"}),
+    (re.compile(r"\bpaypal\b", re.I), {"paypal.com", "paypal.com.br"}),
+    (re.compile(r"apple id|app store|\bicloud\b|\bapple\b", re.I), {"apple.com", "email.apple.com", "icloud.com"}),
+    (re.compile(r"\bmicrosoft\b|office ?365", re.I), {"microsoft.com", "outlook.com", "office.com"}),
+]
+
+
+def _domain_is_legit(domain: str, legit: set[str]) -> bool:
+    """True se o domínio é um dos legítimos ou um subdomínio deles."""
+    return any(domain == d or domain.endswith("." + d) for d in legit)
+
+
+def detect_sender_spoof(from_name: str, domain: str, subject: str) -> tuple[bool, str | None]:
+    """Detecta impersonação: marca conhecida no nome/assunto, domínio que não bate."""
+    if not domain:
+        return False, None
+    haystack = f"{from_name or ''}\n{subject or ''}"
+    for pattern, legit in IMPERSONATION_BRANDS:
+        if pattern.search(haystack) and not _domain_is_legit(domain, legit):
+            marca = pattern.search(haystack).group(0)
+            return True, f"remetente diz '{marca}' mas envia de @{domain} (não é domínio oficial)"
+    return False, None
+
 
 @dataclass
 class RuleResult:
@@ -77,6 +114,7 @@ def evaluate_rules(
     subject: str,
     normalized_text: str,
     from_email: str | None,
+    from_name: str | None = None,
     has_list_unsubscribe: bool,
     attachment_filenames: list[str],
     attachment_types: list[str],
@@ -107,6 +145,12 @@ def evaluate_rules(
     if domain in vip_domains:
         r.importance_score += 40
         r.reasons.append(f"remetente VIP: {domain}")
+
+    spoofed, spoof_reason = detect_sender_spoof(from_name or "", domain, subject)
+    if spoofed:
+        r.spam_score += 0.6
+        r.signals["sender_spoof"] = True
+        r.vote("spam_suspeito", 0.9, spoof_reason)
 
     if SCAM_PATTERNS.search(text):
         r.spam_score += 0.5

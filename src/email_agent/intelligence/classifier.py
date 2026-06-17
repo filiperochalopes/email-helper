@@ -4,15 +4,19 @@ apenas em casos duvidosos, em summarizer.py.
 """
 from dataclasses import dataclass, field
 
+from email_agent.intelligence.category_model import CategoryModel
+from email_agent.intelligence.features import email_features
 from email_agent.intelligence.rules import RuleResult, evaluate_rules
 from email_agent.intelligence.spam_model import SpamModel
 from email_agent.intelligence.taxonomy import (
     CATEGORY_TO_LABELS,
+    LABEL_FRAUDE,
     LABEL_REVISAR,
 )
 
 SPAM_THRESHOLD = 0.75
 UNCERTAIN_BAND = (0.40, 0.75)
+CATEGORY_CONFIDENCE_THRESHOLD = 0.70
 
 
 @dataclass
@@ -32,6 +36,7 @@ def classify(
     subject: str,
     normalized_text: str,
     from_email: str | None,
+    from_name: str | None = None,
     has_list_unsubscribe: bool,
     attachment_filenames: list[str],
     attachment_types: list[str],
@@ -39,11 +44,14 @@ def classify(
     vip_domains: set[str] | None = None,
     blocked_domains: set[str] | None = None,
     spam_model: SpamModel | None = None,
+    category_model: CategoryModel | None = None,
+    category_confidence_threshold: float = CATEGORY_CONFIDENCE_THRESHOLD,
 ) -> Classification:
     rules: RuleResult = evaluate_rules(
         subject=subject,
         normalized_text=normalized_text,
         from_email=from_email,
+        from_name=from_name,
         has_list_unsubscribe=has_list_unsubscribe,
         attachment_filenames=attachment_filenames,
         attachment_types=attachment_types,
@@ -52,10 +60,11 @@ def classify(
         blocked_domains=blocked_domains or set(),
     )
 
+    features = email_features(subject, normalized_text, from_email, from_name)
     spam_score = rules.spam_score
     model_proba = None
     if spam_model and spam_model.is_trained:
-        model_proba = spam_model.predict_proba_spam(f"{subject}\n{normalized_text}")
+        model_proba = spam_model.predict_proba_spam(features)
         if model_proba is not None:
             spam_score = 0.5 * spam_score + 0.5 * model_proba
             rules.reasons.append(f"modelo estatístico: p(spam)={model_proba:.2f}")
@@ -81,6 +90,21 @@ def classify(
     if needs_review:
         category = "revisar"
 
+    # Camada 2 multiclasse: se o modelo de categoria está confiante e não há
+    # conflito a revisar, usamos a previsão dele e elevamos a confiança — isso
+    # tira a decisão da LLM (que só roda quando confidence < 0.6).
+    model_category_conf = None
+    if category_model and category_model.is_trained and not needs_review:
+        pred = category_model.predict(features)
+        if pred and pred[1] >= category_confidence_threshold:
+            category, model_category_conf = pred[0], pred[1]
+            rules.reasons.append(f"modelo de categoria: {category} (p={model_category_conf:.2f})")
+
+    # Override de segurança: impersonação de remetente vai para spam suspeito,
+    # independente de o conteúdo parecer importante (caso clássico de fraude).
+    if rules.signals.get("sender_spoof"):
+        category, needs_review = "spam_suspeito", False
+
     priority = {
         "importante_p0": "P0",
         "importante_p1": "P1",
@@ -98,6 +122,8 @@ def classify(
     labels = list(CATEGORY_TO_LABELS.get(category, []))
     if needs_review and LABEL_REVISAR not in labels:
         labels.append(LABEL_REVISAR)
+    if rules.signals.get("sender_spoof") and LABEL_FRAUDE not in labels:
+        labels.append(LABEL_FRAUDE)
     # Labels de conteúdo coexistem com a categoria principal (ex.: fiscal + importante)
     for cat in ("documento_fiscal", "documento"):
         if votes.get(cat, 0) >= 0.5 and category not in ("spam_suspeito",):
@@ -107,6 +133,10 @@ def classify(
 
     top_vote = max(votes.values(), default=0.0)
     confidence = min(0.95, 0.4 + 0.3 * top_vote + (0.2 if model_proba is not None else 0.0))
+    if model_category_conf is not None:
+        confidence = max(confidence, model_category_conf)
+    if rules.signals.get("sender_spoof"):
+        confidence = max(confidence, 0.85)
 
     return Classification(
         category=category,

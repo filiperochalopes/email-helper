@@ -2,6 +2,8 @@
 from langgraph.graph import END, START, StateGraph
 
 from email_agent.actions.safety_gate import plan_safe_actions
+from email_agent.config import get_settings
+from email_agent.intelligence.category_model import CategoryModel
 from email_agent.intelligence.classifier import classify
 from email_agent.intelligence.followup import detect_followup_waiting_response
 from email_agent.intelligence.rule_agent import evaluate_rules_llm, load_rules_for_account
@@ -12,6 +14,7 @@ from email_agent.intelligence.taxonomy import LABEL_AGUARDANDO
 from email_agent.models import EmailAccount, EmailClassification, EmailMessage, db_session
 
 _spam_model: SpamModel | None = None
+_category_model: CategoryModel | None = None
 
 
 def _get_spam_model() -> SpamModel:
@@ -19,6 +22,13 @@ def _get_spam_model() -> SpamModel:
     if _spam_model is None:
         _spam_model = SpamModel()
     return _spam_model
+
+
+def _get_category_model() -> CategoryModel:
+    global _category_model
+    if _category_model is None:
+        _category_model = CategoryModel()
+    return _category_model
 
 
 def load_email(state: EmailAgentState) -> EmailAgentState:
@@ -33,6 +43,7 @@ def load_email(state: EmailAgentState) -> EmailAgentState:
             "provider_thread_id": msg.provider_thread_id,
             "mailbox": msg.mailbox,
             "from_email": msg.from_email or "",
+            "from_name": msg.from_name or "",
             "subject": msg.subject or "",
             "normalized_text": msg.normalized_text or "",
             "is_sent_by_user": msg.is_sent_by_user,
@@ -56,11 +67,14 @@ def classify_message(state: EmailAgentState) -> EmailAgentState:
         subject=state.get("subject", ""),
         normalized_text=state.get("normalized_text", ""),
         from_email=state.get("from_email"),
+        from_name=state.get("from_name"),
         has_list_unsubscribe=state.get("has_list_unsubscribe", False),
         attachment_filenames=[a.get("filename") or "" for a in state.get("attachments", [])],
         attachment_types=[a.get("content_type") or "" for a in state.get("attachments", [])],
         in_provider_spam=in_spam,
         spam_model=_get_spam_model(),
+        category_model=_get_category_model(),
+        category_confidence_threshold=get_settings().category_confidence_threshold,
     )
     return {
         "spam_score": result.spam_score,

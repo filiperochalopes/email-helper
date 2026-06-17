@@ -7,6 +7,27 @@ from sqlalchemy import select
 from email_agent.models import EmailClassification, EmailMessage, HumanReview, db_session
 
 
+def build_task_data(msg: EmailMessage, cls: EmailClassification) -> dict:
+    """Monta o dict `data` de uma task do Label Studio a partir da mensagem +
+    classificação atual. Compartilhado pelo export em arquivo e pelo sync via API."""
+    return {
+        "email_agent_id": msg.email_agent_id,
+        "account_id": msg.account_id,
+        "mailbox": msg.mailbox,
+        "from": f"{msg.from_name or ''} <{msg.from_email or ''}>",
+        "subject": msg.subject,
+        "date": msg.date.isoformat() if msg.date else None,
+        "snippet": msg.snippet,
+        "text": (msg.normalized_text or "")[:8000],
+        "attachments": [a.filename for a in msg.attachments],
+        "suggested_category": cls.category,
+        "spam_score": cls.spam_score,
+        "importance_score": cls.importance_score,
+        "reason": cls.importance_reason,
+        "current_ai_labels": msg.ai_labels,
+    }
+
+
 def export_tasks(
     output_file: str,
     *,
@@ -29,26 +50,7 @@ def export_tasks(
                 continue
             if uncertain and (cls.confidence or 0) >= 0.6:
                 continue
-            tasks.append(
-                {
-                    "data": {
-                        "email_agent_id": msg.email_agent_id,
-                        "account_id": msg.account_id,
-                        "mailbox": msg.mailbox,
-                        "from": f"{msg.from_name or ''} <{msg.from_email or ''}>",
-                        "subject": msg.subject,
-                        "date": msg.date.isoformat() if msg.date else None,
-                        "snippet": msg.snippet,
-                        "text": (msg.normalized_text or "")[:8000],
-                        "attachments": [a.filename for a in msg.attachments],
-                        "suggested_category": cls.category,
-                        "spam_score": cls.spam_score,
-                        "importance_score": cls.importance_score,
-                        "reason": cls.importance_reason,
-                        "current_ai_labels": msg.ai_labels,
-                    }
-                }
-            )
+            tasks.append({"data": build_task_data(msg, cls)})
             session.add(
                 HumanReview(
                     message_id=msg.id,
