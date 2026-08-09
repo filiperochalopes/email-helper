@@ -33,13 +33,21 @@ class Settings(BaseSettings):
     digest_max_age_days: int = 90
     # Sugestão de limpeza: idade mínima para um e-mail virar candidato a exclusão.
     cleanup_min_age_days: int = 90
+    # Auto-archive diário: Importante/Documento já lido com mais de N dias (6 meses)
+    # sai da INBOX para AI/Archive.
+    archive_auto_min_age_days: int = 180
 
     spam_model_path: str = "/data/models/spam_model.joblib"
     # Modelo multiclasse de categoria (todas as labels, não só spam/ham).
     category_model_path: str = "/data/models/category_model.joblib"
     training_min_events: int = 20
-    # Confiança mínima do modelo de categoria para a decisão dispensar a LLM.
+    # Cascata de decisão: regras determinísticas > ML tradicional > LLM.
+    # `category_confidence_threshold` é o CUTOFF do ML: se o modelo de categoria
+    # prevê com p >= este valor, a decisão é dele e a LLM é dispensada.
     category_confidence_threshold: float = 0.70
+    # Abaixo desta confiança final (nem regra forte, nem ML confiante), o e-mail
+    # cai para a LLM (último degrau da cascata) — ver intelligence/graph.py.
+    llm_min_confidence: float = 0.60
 
     label_studio_url: str = ""
     label_studio_api_key: str = ""

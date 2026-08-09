@@ -3,6 +3,7 @@ e retreinamento do modelo de spam.
 """
 from datetime import datetime, timezone
 
+import numpy as np
 from sqlalchemy import func, select
 
 from email_agent.config import get_settings
@@ -13,11 +14,13 @@ from email_agent.intelligence.taxonomy import (
     CATEGORIES,
     LABEL_AGUARDANDO,
     LABEL_FISCAL,
+    LABEL_IMPORTANTE,
     LABEL_MARKETING,
     LABEL_SPAM_SUSPEITO,
 )
 from email_agent.logging_setup import get_logger
 from email_agent.models import (
+    EmailActionLog,
     EmailClassification,
     EmailMessage,
     EmailTrainingEvent,
@@ -30,11 +33,19 @@ MANUAL_SOURCES = {"label_studio", "explicit_cli_feedback"}
 
 log = get_logger(__name__)
 
-# label de treino binário do modelo de spam
+# Rótulos do treino binário do modelo de spam. Todo rótulo "não-spam" precisa cair
+# em HAM_LABELS para virar negativo (0) — senão o modelo treina só com positivos.
+# Em especial "ignorar"/marketing/noticia/promocao são o grosso do sinal negativo
+# natural do usuário (descartes), então têm de entrar aqui.
+# Mínimo de exemplos por classe para considerá-la "pronta" para o ML decidir sozinho
+# (heurística de prontidão usada por `train stats`, não bloqueia o treino).
+MIN_EVENTS_PER_CLASS = 30
+
 SPAM_LABELS = {"spam_suspeito"}
 HAM_LABELS = {
     "ham", "documento", "documento_fiscal", "aguardando_resposta",
     "importante_p0", "importante_p1",
+    "ignorar", "marketing", "noticia", "promocao",
 }
 
 
@@ -61,7 +72,7 @@ def derive_training_from_user_events() -> int:
             if msg is None:
                 continue
             ai = set(msg.ai_labels or [])
-            label, weight = _training_for_event(ev, ai)
+            label, weight = _training_for_event(ev, ai, session=session)
             if label is None:
                 continue
             session.add(
@@ -75,11 +86,92 @@ def derive_training_from_user_events() -> int:
                 )
             )
             created += 1
+        created += _derive_reply_importance(session)
     log.info("implicit_training_derived", created=created)
     return created
 
 
-def _training_for_event(ev: EmailUserEvent, ai_labels: set[str]) -> tuple[str | None, float]:
+def _derive_reply_importance(session) -> int:
+    """Você respondeu => o e-mail original importava. Marca `importante_p1` (peso 0.9)
+    nos e-mails recebidos que tiveram resposta posterior sua na mesma thread. Dedup por
+    marcador `reply:<id>` no campo reason."""
+    created = 0
+    processed = {
+        r[0]
+        for r in session.execute(
+            select(EmailTrainingEvent.reason).where(
+                EmailTrainingEvent.source == "implicit_event"
+            )
+        )
+        if r[0] and r[0].startswith("reply:")
+    }
+    sent = (
+        session.execute(
+            select(EmailMessage).where(
+                EmailMessage.is_sent_by_user.is_(True),
+                EmailMessage.provider_thread_id.is_not(None),
+                EmailMessage.date.is_not(None),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for s in sent:
+        inbound = (
+            session.execute(
+                select(EmailMessage).where(
+                    EmailMessage.account_id == s.account_id,
+                    EmailMessage.provider_thread_id == s.provider_thread_id,
+                    EmailMessage.is_sent_by_user.is_(False),
+                    EmailMessage.date < s.date,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for msg in inbound:
+            marker = f"reply:{msg.id}"
+            if marker in processed:
+                continue
+            processed.add(marker)
+            session.add(
+                EmailTrainingEvent(
+                    message_id=msg.id,
+                    label="importante_p1",
+                    source="implicit_event",
+                    weight=0.9,
+                    trusted=True,
+                    reason=marker,
+                )
+            )
+            created += 1
+    return created
+
+
+def _was_agent_label_action(session, message_id: int, label: str) -> bool:
+    """True se a label foi aplicada pelo PRÓPRIO agente (consta em email_action_log).
+
+    Regra 4 do MVP: decisão automática do agente não vira treino confiável. Quando o
+    pipeline aplica AI/Importante (ou outra), o sync seguinte enxerga a mudança de
+    label como se fosse ação do usuário — esta guarda evita treinar com a própria
+    decisão. Só vale para ADIÇÕES; remoções de label AI são sempre do usuário (o
+    pipeline nunca remove labels AI automaticamente)."""
+    if session is None:
+        return False
+    row = session.execute(
+        select(EmailActionLog.id).where(
+            EmailActionLog.message_id == message_id,
+            EmailActionLog.action_type == "add_label",
+            EmailActionLog.status == "success",
+            EmailActionLog.action_payload["label"].as_string() == label,
+        )
+    ).first()
+    return row is not None
+
+
+def _training_for_event(
+    ev: EmailUserEvent, ai_labels: set[str], *, session=None
+) -> tuple[str | None, float]:
     et = ev.event_type
     if et == "moved_to_trash":
         if LABEL_SPAM_SUSPEITO in ai_labels:
@@ -98,21 +190,42 @@ def _training_for_event(ev: EmailUserEvent, ai_labels: set[str]) -> tuple[str | 
     if et == "moved_to_spam":
         return "spam_suspeito", 0.8
     if et == "replied_by_user":
-        return "ham", 0.9
+        # Você respondeu => importava. (O caso geral é coberto por
+        # _derive_reply_importance, varrendo threads; aqui fica o evento explícito.)
+        return "importante_p1", 0.9
     if et == "removed_label" and LABEL_SPAM_SUSPEITO in (ev.previous_labels or []):
         return "ham", 0.8
-    if et in ("added_label", "label_changed"):
+    if et in ("added_label", "removed_label", "label_changed"):
         # A camada de sync grava mudanças de label como `label_changed` carregando
-        # previous/new_labels; deriva o delta para tratar igual a added/removed_label.
+        # previous/new_labels (já resolvidos para NOMES de label AI no Gmail); deriva
+        # o delta para tratar igual a added/removed_label.
         prev = set(ev.previous_labels or [])
         new = set(ev.new_labels or [])
         added = new - prev
         removed = prev - new
-        if LABEL_FISCAL in added:
+
+        # Negativo FORTE: você tirou AI/Importante de um e-mail que tinha sido marcado
+        # como importante => sinal claro de que NÃO é importante. Vence tudo.
+        if LABEL_IMPORTANTE in removed:
+            return "ignorar", 1.0
+
+        # Positivos por adição manual de label. Guarda: ignora se a adição foi do
+        # próprio agente (consta em email_action_log) — só conta rótulo do usuário.
+        if LABEL_IMPORTANTE in added and not _was_agent_label_action(
+            session, ev.message_id, LABEL_IMPORTANTE
+        ):
+            return "importante_p1", 1.0
+        if LABEL_FISCAL in added and not _was_agent_label_action(
+            session, ev.message_id, LABEL_FISCAL
+        ):
             return "documento_fiscal", 0.9
-        if LABEL_AGUARDANDO in added:
+        if LABEL_AGUARDANDO in added and not _was_agent_label_action(
+            session, ev.message_id, LABEL_AGUARDANDO
+        ):
             return "aguardando_resposta", 0.9
-        if LABEL_SPAM_SUSPEITO in added:
+        if LABEL_SPAM_SUSPEITO in added and not _was_agent_label_action(
+            session, ev.message_id, LABEL_SPAM_SUSPEITO
+        ):
             return "spam_suspeito", 0.9
         if LABEL_SPAM_SUSPEITO in removed:
             return "ham", 0.8
@@ -151,6 +264,24 @@ def training_stats() -> dict:
                 EmailTrainingEvent.consumed_at.is_not(None)
             )
         )
+        trusted_by_label = {
+            str(label): int(n)
+            for label, n in session.execute(
+                select(EmailTrainingEvent.label, func.count())
+                .where(EmailTrainingEvent.trusted.is_(True))
+                .group_by(EmailTrainingEvent.label)
+            ).all()
+        }
+
+    # Prontidão por classe: quanto de sinal confiável temos para cada categoria que
+    # o ML precisa aprender (spam/importante/etc.). Mostra onde ainda falta rótulo.
+    class_readiness = {
+        cat: {
+            "count": trusted_by_label.get(cat, 0),
+            "ready": trusted_by_label.get(cat, 0) >= MIN_EVENTS_PER_CLASS,
+        }
+        for cat in CATEGORIES
+    }
 
     spam = SpamModel()
     category = CategoryModel()
@@ -163,7 +294,9 @@ def training_stats() -> dict:
             "pending_fit": pending or 0,
             "already_consumed": consumed or 0,
             "min_events_to_fit": settings.training_min_events,
+            "min_events_per_class": MIN_EVENTS_PER_CLASS,
         },
+        "class_readiness": class_readiness,
         "user_feedback_by_event": user_events_by_type,
         "auto_classifications": {
             "by_category": auto_by_category,
@@ -238,3 +371,92 @@ def fit_models() -> dict:
 def fit_spam_model() -> int:
     """Compat: treina ambos os modelos, devolve nº de amostras do modelo de spam."""
     return fit_models()["spam_samples"]
+
+
+def _collect_dataset(session) -> list[tuple[str, str, float]]:
+    """(features, label, weight) de todos os eventos confiáveis com texto utilizável."""
+    rows = (
+        session.execute(
+            select(EmailTrainingEvent).where(EmailTrainingEvent.trusted.is_(True))
+        )
+        .scalars()
+        .all()
+    )
+    out: list[tuple[str, str, float]] = []
+    for ev in rows:
+        msg = session.get(EmailMessage, ev.message_id)
+        if not msg or not msg.normalized_text:
+            continue
+        feats = email_features(msg.subject, msg.normalized_text, msg.from_email, msg.from_name)
+        out.append((feats, ev.label, ev.weight))
+    return out
+
+
+def _holdout_report(texts, labels, weights, test_size: float) -> dict:
+    """Treina um SGD limpo no split de treino e mede precision/recall/f1 por classe
+    no split de teste. Espelha o modelo de produção (HashingVectorizer + SGD log_loss)."""
+    from sklearn.feature_extraction.text import HashingVectorizer
+    from sklearn.linear_model import SGDClassifier
+    from sklearn.metrics import precision_recall_fscore_support
+    from sklearn.model_selection import train_test_split
+
+    classes = sorted(set(labels))
+    if len(classes) < 2:
+        return {"error": f"apenas uma classe presente ({classes}); impossível avaliar"}
+    min_class = min(labels.count(c) for c in classes)
+    if min_class < 2 or len(labels) < 8:
+        return {"error": f"poucas amostras (classe menor tem {min_class})"}
+
+    stratify = labels if min_class >= 2 else None
+    idx = list(range(len(labels)))
+    tr, te = train_test_split(idx, test_size=test_size, random_state=42, stratify=stratify)
+
+    vec = HashingVectorizer(n_features=2**20, alternate_sign=False)
+    Xtr = vec.transform([texts[i] for i in tr])
+    clf = SGDClassifier(loss="log_loss", alpha=1e-5, random_state=42)
+    clf.partial_fit(Xtr, [labels[i] for i in tr], classes=np.array(classes),
+                    sample_weight=[weights[i] for i in tr])
+
+    y_true = [labels[i] for i in te]
+    y_pred = list(clf.predict(vec.transform([texts[i] for i in te])))
+    p, r, f1, sup = precision_recall_fscore_support(
+        y_true, y_pred, labels=classes, zero_division=0
+    )
+    per_class = {
+        c: {"precision": round(float(p[i]), 3), "recall": round(float(r[i]), 3),
+            "f1": round(float(f1[i]), 3), "support": int(sup[i])}
+        for i, c in enumerate(classes)
+    }
+    correct = sum(1 for a, b in zip(y_true, y_pred) if a == b)
+    return {
+        "accuracy": round(correct / len(y_true), 3),
+        "train_size": len(tr),
+        "test_size": len(te),
+        "per_class": per_class,
+    }
+
+
+def evaluate_models(test_size: float = 0.25) -> dict:
+    """Avalia (holdout) a qualidade dos dois modelos no dataset confiável atual, para
+    decidir o quanto confiar no ML antes de aumentar o cutoff. Não altera os modelos
+    de produção nem consome eventos — treina cópias limpas só para medir."""
+    with db_session() as session:
+        data = _collect_dataset(session)
+
+    if not data:
+        return {"error": "sem dados de treino utilizáveis"}
+
+    spam_t, spam_l, spam_w = [], [], []
+    cat_t, cat_l, cat_w = [], [], []
+    for feats, label, weight in data:
+        binary = 1 if label in SPAM_LABELS else (0 if label in HAM_LABELS else None)
+        if binary is not None:
+            spam_t.append(feats); spam_l.append("spam" if binary else "ham"); spam_w.append(weight)
+        if label in CATEGORIES:
+            cat_t.append(feats); cat_l.append(label); cat_w.append(weight)
+
+    return {
+        "samples": len(data),
+        "spam": _holdout_report(spam_t, spam_l, spam_w, test_size),
+        "category": _holdout_report(cat_t, cat_l, cat_w, test_size),
+    }

@@ -131,12 +131,24 @@ def classify(
                 if lb not in labels:
                     labels.append(lb)
 
+    # --- Confiança da cascata regras > ML > LLM ---
+    # O bônus do modelo de spam só conta quando ele é DECISIVO (probabilidade nas
+    # pontas), não pelo mero fato de estar treinado — senão um modelo indeciso
+    # inflaria a confiança e impediria o e-mail incerto de cair para a LLM.
     top_vote = max(votes.values(), default=0.0)
-    confidence = min(0.95, 0.4 + 0.3 * top_vote + (0.2 if model_proba is not None else 0.0))
+    model_decisive = model_proba is not None and (
+        model_proba >= SPAM_THRESHOLD or model_proba <= 1 - SPAM_THRESHOLD
+    )
+    confidence = min(0.95, 0.4 + 0.3 * top_vote + (0.2 if model_decisive else 0.0))
+
+    decided_by = "regras"  # degrau que resolveu (antes da LLM)
     if model_category_conf is not None:
         confidence = max(confidence, model_category_conf)
+        decided_by = "ml"
     if rules.signals.get("sender_spoof"):
         confidence = max(confidence, 0.85)
+        decided_by = "regras (impersonação)"
+    rules.reasons.append(f"decisão pré-LLM: {decided_by} (confiança={confidence:.2f})")
 
     return Classification(
         category=category,

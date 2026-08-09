@@ -8,6 +8,9 @@ correções: [PLANO_REVISADO.md](PLANO_REVISADO.md). Operação: [README.md](REA
 
 - `src/email_agent/` — pacote único; entrypoints: API FastAPI (`api/app.py`), Celery
   (`workers/celery_app.py`, beat embutido), CLI Typer (`cli/app.py`, comando `email-agent`).
+- `tui/` — console interativo estilo DOS (Rich + readchar), comando `email-agent tui` (host).
+  Edita `accounts.yml`/`rules.yml` via ruamel (preserva comentários; YAML = fonte de verdade) e
+  dispara `import-yaml`/`gmail auth` (`tui/runner.py` escolhe `docker compose exec` vs local).
 - Fluxo: sync (`sync/`) → persistência+dedup (`sync/persist.py`) → pipeline LangGraph
   (`intelligence/graph.py`: regras → modelo sklearn → followup → LLM só se incerto → safety gate)
   → labels via `actions/`.
@@ -21,11 +24,15 @@ correções: [PLANO_REVISADO.md](PLANO_REVISADO.md). Operação: [README.md](REA
 
 ## Regras inegociáveis (política do MVP)
 
-1. O **pipeline automático** nunca deleta/expunge/move para Trash ou Spam do provedor. Ação
-   "negativa" máxima do agente = aplicar label `AI/Spam Suspeito`. Exceção única e explícita:
-   o comando CLI `delete`/`rm`, disparado pelo usuário, que mostra o corpo e confirma **um a um**,
-   **move para a Lixeira** (recuperável, nunca expunge) via `actions/delete_actions.py` — com
-   `idempotency_key` e log em `email_action_log`. `safety_gate.py` permanece sem caminho destrutivo.
+1. O **pipeline automático** nunca deleta/expunge/move para Trash ou Spam **do provedor**. Pode
+   **organizar**: aplicar label AI move o e-mail para fora da INBOX (Gmail: adiciona label +
+   remove `INBOX`; IMAP: move para a pasta `AI.…`), EXCETO `AI/Importante` e
+   `AI/Importante/Aguardando Resposta`, que **ficam na INBOX** (`taxonomy.INBOX_KEEP_LABELS`).
+   Nunca há duplicação (não copia mais). Exceções destrutivas, só por comando do usuário:
+   `delete`/`rm` (move para a **Lixeira** do provedor) via `actions/delete_actions.py`. O
+   arquivamento (`archive`/`archive-one` e o ciclo diário `auto_archive_old`) move para
+   `AI/Archive` — **fora da INBOX, recuperável, nunca deleta**. Tudo com `idempotency_key` e
+   log em `email_action_log`. `safety_gate.py` permanece sem Trash/Spam/expunge.
 2. Dúvida/conflito → `AI/Revisar` + registro em `human_review`. Não decidir automaticamente.
 3. Toda ação no provedor passa por `actions/safety_gate.py` com `idempotency_key` e log em
    `email_action_log`. Sem exceções nem atalhos.
@@ -42,9 +49,19 @@ correções: [PLANO_REVISADO.md](PLANO_REVISADO.md). Operação: [README.md](REA
 - Logging: `from email_agent.logging_setup import get_logger` (structlog JSON). Não usar `print`.
 - Strings de usuário/labels/docs em pt-BR; código e identificadores em inglês.
 - IDs internos: `E-YYYYMMDD-NNNNNN` (sequence global do Postgres, `ids.py`).
-- IMAP: `provider_message_id = "pasta:uidvalidity:uid"`; labels AI viram **cópia** para pasta
-  `AI.…` (IMAP não tem labels). Gmail: labels reais via API. Conexão IMAP: SSL implícito 993 por
+- IMAP: `provider_message_id = "pasta:uidvalidity:uid"`; aplicar label AI **move** a mensagem para
+  a pasta `AI.…` (IMAP não tem labels) — um e-mail vive em UMA pasta só, então quando há várias
+  labels que saem da INBOX a pasta destino é decidida por `taxonomy.imap_destination` /
+  `IMAP_DEST_PRIORITY`; as demais labels ficam só em `email_message.ai_labels`. Labels que ficam
+  na INBOX (Importante/Aguardando) não geram pasta no IMAP (a label vive no banco/digest). Gmail:
+  labels reais via API + remoção de `INBOX` para "arquivar". Conexão IMAP: SSL implícito 993 por
   padrão; `port`/`starttls`/`ssl` configuráveis por conta em `accounts.yml`.
+- `AI/Archive` = arquivo morto (fora da INBOX, recuperável). Fluxo manual: `email-agent archive
+  --before YYYY-MM-DD` (cutoff; ignora marketing/notícia e spam) ou `archive-one E-…`. Ciclo
+  automático diário **estrito** (`auto_archive_old`, beat `auto-archive-night`): só
+  Importante/Documentos/Fiscal **já lidos** com mais de `archive_auto_min_age_days` (180d).
+- Sync IMAP de spam/trash é só para dedup/sinal: essas mensagens **não** são classificadas
+  (não recebem label AI). Ver `sync/imap_sync.py` e o guard em `workers/tasks_classify.py`.
 - Evolution API é **v2**: payload plano `{"number", "text"}`, header `apikey`. Não regredir para
   o formato v1 `textMessage`.
 - LLM: toda chamada ao Ollama passa por `intelligence/ollama_client.generate_json(prompt, task=...)`.

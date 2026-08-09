@@ -49,6 +49,17 @@ def test_spam_with_malicious_attachment():
     assert LABEL_SPAM_SUSPEITO in r.suggested_labels
 
 
+def test_vague_email_low_confidence_falls_to_llm():
+    # Sem sinais de regra nem ML: confiança fica abaixo do cutoff (0.60), de modo que
+    # a cascata regras > ML > LLM mande o e-mail para a LLM no grafo.
+    r = _classify(
+        subject="oi",
+        normalized_text="tudo bem com você?",
+    )
+    assert r.confidence < 0.60
+    assert any("decisão pré-LLM" in reason for reason in r.reasons)
+
+
 def test_spam_folder_but_important_goes_to_review():
     r = _classify(
         subject="Contrato assinado - favor validar pagamento",

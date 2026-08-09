@@ -27,9 +27,11 @@ def _get_cursor(session, account_id: int, mailbox: str) -> MailboxCursor:
 
 
 def sync_account(account_id: int, bootstrap: bool = False) -> list[int]:
-    """Sincroniza uma conta IMAP. Retorna ids (banco) das mensagens novas."""
+    """Sincroniza uma conta IMAP. Retorna ids (banco) apenas das mensagens novas
+    da INBOX e Sent — spam/trash são persistidos para dedup mas não classificados
+    (evita que o agente aplique labels AI em emails já descartados pelo usuário)."""
     settings = get_settings()
-    new_ids: list[int] = []
+    classify_ids: list[int] = []
     with db_session() as session:
         account = session.get(EmailAccount, account_id)
 
@@ -54,13 +56,16 @@ def sync_account(account_id: int, bootstrap: bool = False) -> list[int]:
             monitored.append(("trash", folders["trash"]))  # type: ignore[arg-type]
         for role, folder in monitored:
             try:
-                new_ids += _sync_folder(client, account, role, folder, bootstrap, settings)
+                new_ids = _sync_folder(client, account, role, folder, bootstrap, settings)
+                if role in ("inbox", "sent"):
+                    classify_ids += new_ids
+                # spam/trash: persistidos para dedup, não enfileirados para classificação
             except Exception as exc:  # noqa: BLE001
                 log.error(
                     "imap_folder_sync_failed",
                     account=account.email_address, folder=folder, error=str(exc),
                 )
-    return new_ids
+    return classify_ids
 
 
 def _sync_folder(client, account, role: str, folder: str, bootstrap: bool, settings) -> list[int]:

@@ -153,8 +153,13 @@ def apply_rules(state: EmailAgentState) -> EmailAgentState:
 
 
 def llm_node(state: EmailAgentState) -> EmailAgentState:
-    """Camada 3: só roda em incerteza ou se for entrar no resumo (gera summary legível)."""
-    uncertain = state.get("needs_human_review") or state.get("confidence", 1.0) < 0.6
+    """Camada 3 (último degrau da cascata regras > ML > LLM): só roda quando nem a
+    regra determinística nem o ML alcançaram o cutoff de confiança, ou quando o
+    e-mail entra no resumo (gera summary legível)."""
+    uncertain = (
+        state.get("needs_human_review")
+        or state.get("confidence", 1.0) < get_settings().llm_min_confidence
+    )
     in_digest = state.get("priority") in ("P0", "P1")
     if not (uncertain or in_digest):
         return {}

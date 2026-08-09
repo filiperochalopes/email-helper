@@ -43,7 +43,11 @@ app.conf.beat_schedule = {
     "classify-noon": {"task": "email_agent.classify_pending", "schedule": crontab(hour=12, minute=35)},
     "sync-evening": {"task": "email_agent.sync_all_accounts", "schedule": crontab(hour=17, minute=30)},
     "classify-evening": {"task": "email_agent.classify_pending", "schedule": crontab(hour=17, minute=35)},
-    # Noite: manutenção e retreinamento
+    # Noite: arquivamento automático (Importante/Documento lido > 6 meses) e manutenção
+    "auto-archive-night": {
+        "task": "email_agent.auto_archive_old",
+        "schedule": crontab(hour=23, minute=15),
+    },
     "maintenance-night": {
         "task": "email_agent.nightly_maintenance",
         "schedule": crontab(hour=23, minute=30),

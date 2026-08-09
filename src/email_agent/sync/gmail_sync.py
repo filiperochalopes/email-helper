@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from googleapiclient.errors import HttpError
 from sqlalchemy import select
 
+from email_agent.actions.gmail_actions import resolve_label_names
 from email_agent.config import get_settings
 from email_agent.connectors.gmail_client import get_service
 from email_agent.logging_setup import get_logger
@@ -134,12 +135,20 @@ def _fetch_and_persist(service, account: EmailAccount, message_ids: list[str]) -
             ).scalar_one_or_none()
             if existing:
                 if set(existing.raw_labels or []) != set(labels):
+                    # Grava o delta com NOMES de label (AI/Importante, ...) em vez de
+                    # IDs do Gmail (Label_42), para a derivação de treino casar as
+                    # labels AI. O event_type usa labels de sistema (INBOX/SPAM/...),
+                    # que já são nomes, então é calculado com os IDs originais.
                     session.add(
                         EmailUserEvent(
                             message_id=existing.id,
                             event_type=_event_for_label_change(existing.raw_labels or [], labels),
-                            previous_labels=existing.raw_labels,
-                            new_labels=labels,
+                            previous_labels=resolve_label_names(
+                                service, account.email_address, existing.raw_labels or []
+                            ),
+                            new_labels=resolve_label_names(
+                                service, account.email_address, labels
+                            ),
                             source="gmail_history",
                         )
                     )

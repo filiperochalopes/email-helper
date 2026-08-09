@@ -16,6 +16,15 @@ def _label_map(service, account_email: str) -> dict[str, str]:
     return _label_cache[account_email]
 
 
+def resolve_label_names(service, account_email: str, label_ids: list[str]) -> list[str]:
+    """Traduz IDs de label do Gmail (ex.: 'Label_42') para nomes legíveis
+    (ex.: 'AI/Importante'). Labels de sistema (INBOX, SPAM, ...) têm id==nome e
+    passam direto. Usado pelo sync para que os eventos de mudança de label gravem
+    nomes — sem isso, a derivação de treino nunca casa as labels AI."""
+    id_to_name = {lid: name for name, lid in _label_map(service, account_email).items()}
+    return [id_to_name.get(lid, lid) for lid in label_ids]
+
+
 def ensure_ai_labels(account: EmailAccount) -> None:
     service = get_service(account)
     existing = _label_map(service, account.email_address)
@@ -45,6 +54,20 @@ def add_label(account: EmailAccount, provider_message_id: str, label_name: str) 
     service.users().messages().modify(
         userId="me", id=provider_message_id, body={"addLabelIds": [label_id]}
     ).execute()
+
+
+def move_to_label(account: EmailAccount, provider_message_id: str, label_name: str) -> None:
+    """Adiciona a label AI e REMOVE a label INBOX — equivalente a "Arquivar" do Gmail.
+    O e-mail some da caixa de entrada mas continua acessível pela label (reversível)."""
+    service = get_service(account)
+    ensure_ai_labels(account)
+    label_id = _label_map(service, account.email_address)[label_name]
+    service.users().messages().modify(
+        userId="me",
+        id=provider_message_id,
+        body={"addLabelIds": [label_id], "removeLabelIds": ["INBOX"]},
+    ).execute()
+    log.info("gmail_moved_to_label", account=account.email_address, label=label_name)
 
 
 def remove_label(account: EmailAccount, provider_message_id: str, label_name: str) -> None:

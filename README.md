@@ -51,6 +51,21 @@ docker compose exec app email-agent accounts list
 > OAuth do Google: app **Desktop**, publishing status **Production** (Testing expira refresh
 > token em 7 dias). Detalhes em PLANO_REVISADO.md.
 
+## Console TUI (contas e regras)
+
+Em vez de editar os YAML na mão, há um console interativo estilo DOS (Rich + readchar)
+que lê/escreve `secrets/accounts.yml` e `secrets/rules.yml` (preservando comentários),
+dispara o `import-yaml` (no container, se o stack estiver de pé) e o OAuth do Gmail
+(no host). **Rodar no host**, pois a reautenticação abre o navegador:
+
+```bash
+.venv/bin/email-agent tui
+```
+
+Navegação por ↑/↓ e Enter; Esc volta. Permite adicionar/editar/remover contas Gmail e
+IMAP, reautenticar o Gmail, criar regras (inclusive o atalho "marcar domínio como spam
+suspeito" → label `AI/Spam Suspeito`, nunca deleção) e ver o `auth_status` do banco.
+
 ## Regras de importância (agente LLM)
 
 Regras por conta em linguagem natural ficam em `secrets/rules.yml` (ver `rules.example.yml`):

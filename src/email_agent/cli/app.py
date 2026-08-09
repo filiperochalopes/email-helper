@@ -43,6 +43,17 @@ def _init():
     configure_logging()
 
 
+@app.command()
+def tui():
+    """Abre o console TUI (estilo DOS) para gerir contas e regras (RODAR NO HOST).
+
+    Edita secrets/accounts.yml e secrets/rules.yml e dispara import-yaml / gmail auth.
+    """
+    from email_agent.tui.app import main
+
+    main()
+
+
 # ---------- helpers ----------
 
 def _load_message(email_agent_id: str) -> tuple[EmailMessage, EmailClassification | None]:
@@ -135,9 +146,23 @@ def feedback(email_agent_id: str):
 
 
 @app.command()
-def label(email_agent_id: str):
+def label(
+    email_agent_id: str,
+    set_label: str = typer.Option(None, "--set", help="Aplica direto uma label AI (uso do TUI)."),
+):
     """Aplicar/remover labels AI com menu interativo (altera o provedor)."""
     msg, cls = _load_message(email_agent_id)
+    if set_label:
+        if set_label not in ALL_AI_LABELS:
+            console.print(f"[red]Label inválida:[/red] {set_label}")
+            raise typer.Exit(1)
+        _apply_label_to_provider(msg, set_label)
+        _record_label_event(
+            msg, previous=msg.ai_labels or [], new=sorted(set(msg.ai_labels or []) | {set_label}),
+            event="added_label",
+        )
+        console.print(f"[green]Label aplicada:[/green] {set_label}")
+        return
     _print_summary(msg, cls)
     for i, lb in enumerate(ALL_AI_LABELS, start=1):
         console.print(f"{i}. {lb}")
@@ -249,27 +274,50 @@ def search(
 @app.command()
 def show(
     email_agent_ids: list[str] = typer.Argument(..., help="Um ou mais IDs (E-YYYYMMDD-NNNNNN)."),
+    json_out: bool = typer.Option(False, "--json", help="Saída JSON (1 objeto por linha) p/ ferramentas."),
 ):
     """Mostra detalhes de uma ou mais mensagens."""
     for i, eid in enumerate(email_agent_ids):
+        msg, cls = _load_message(eid)
+        if json_out:
+            import json as _json
+
+            with db_session() as session:
+                account = session.get(EmailAccount, msg.account_id)
+            print(_json.dumps({
+                "id": msg.email_agent_id,
+                "account": account.email_address if account else str(msg.account_id),
+                "from_name": msg.from_name or "",
+                "from_email": msg.from_email or "",
+                "subject": msg.subject or "",
+                "date": str(msg.date),
+                "mailbox": msg.mailbox,
+                "ai_labels": list(msg.ai_labels or []),
+                "priority": cls.priority if cls else None,
+                "category": cls.category if cls else None,
+                "summary": (cls.digest_summary if cls else None) or (msg.snippet or "")[:160],
+                "reason": (cls.importance_reason if cls else "") or "",
+                "body": (msg.normalized_text or msg.snippet or "")[:4000],
+            }, default=str))
+            continue
         if i:
             console.rule(style="dim")
-        msg, cls = _load_message(eid)
         _print_summary(msg, cls)
         console.print((msg.normalized_text or "")[:2000])
 
 
-def _delete_impl(email_agent_ids: list[str]) -> None:
+def _delete_impl(email_agent_ids: list[str], assume_yes: bool = False) -> None:
     from email_agent.actions.delete_actions import trash_message
 
     for eid in email_agent_ids:
         msg, cls = _load_message(eid)
-        _print_summary(msg, cls)
-        body = (msg.normalized_text or msg.snippet or "(sem corpo)").strip()
-        console.print(Panel(body[:4000], title=f"Corpo — {eid}", border_style="dim"))
-        if not typer.confirm(f"Mover {eid} para a Lixeira?", default=False):
-            console.print(f"[yellow]Pulado:[/yellow] {eid}\n")
-            continue
+        if not assume_yes:
+            _print_summary(msg, cls)
+            body = (msg.normalized_text or msg.snippet or "(sem corpo)").strip()
+            console.print(Panel(body[:4000], title=f"Corpo — {eid}", border_style="dim"))
+            if not typer.confirm(f"Mover {eid} para a Lixeira?", default=False):
+                console.print(f"[yellow]Pulado:[/yellow] {eid}\n")
+                continue
         status = trash_message(eid)
         if status == "trashed":
             console.print(f"[green]Movido para a Lixeira:[/green] {eid}\n")
@@ -282,11 +330,12 @@ def _delete_impl(email_agent_ids: list[str]) -> None:
 @app.command()
 def delete(
     email_agent_ids: list[str] = typer.Argument(..., help="Um ou mais IDs (E-YYYYMMDD-NNNNNN)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Pula a confirmação 1 a 1 (uso do TUI)."),
 ):
     """Move e-mail(s) para a Lixeira do provedor — mostra o corpo e confirma 1 a 1.
 
     Ação não-destrutiva (recuperável na Lixeira) e registrada em email_action_log."""
-    _delete_impl(email_agent_ids)
+    _delete_impl(email_agent_ids, assume_yes=yes)
 
 
 @app.command()
@@ -295,6 +344,65 @@ def rm(
 ):
     """Alias de `delete`."""
     _delete_impl(email_agent_ids)
+
+
+@app.command()
+def archive(
+    before: str = typer.Option(..., "--before", help="Cutoff de data (YYYY-MM-DD): arquiva e-mails anteriores."),
+    account: str = typer.Option(None, "--account", help="Restringe a uma conta (e-mail). Padrão: todas."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Não confirma 1 a 1 (uso do TUI/batch)."),
+):
+    """Move para AI/Archive e-mails antigos da INBOX (anteriores ao cutoff), exceto
+    marketing/notícia e spam. Recuperável e registrado em email_action_log."""
+    from datetime import datetime, timezone
+
+    from email_agent.actions.archive_actions import archive_message, find_manual_archive_candidates
+
+    try:
+        cutoff = datetime.strptime(before, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        console.print("[red]Data inválida.[/red] Use o formato YYYY-MM-DD.")
+        raise typer.Exit(1)
+
+    ids = find_manual_archive_candidates(cutoff, account_email=account)
+    if not ids:
+        console.print("[yellow]Nenhum e-mail elegível para arquivar com esse cutoff.[/yellow]")
+        return
+    console.print(f"[cyan]{len(ids)} e-mail(s)[/cyan] na INBOX anteriores a {before}.")
+    if not yes and not typer.confirm("Arquivar todos em AI/Archive?", default=False):
+        console.print("[yellow]Cancelado.[/yellow]")
+        return
+    archived = already = failed = 0
+    for eid in ids:
+        status = archive_message(eid)
+        if status == "archived":
+            archived += 1
+        elif status == "already":
+            already += 1
+        else:
+            failed += 1
+            console.print(f"[red]Falha:[/red] {eid} — {status}")
+    console.print(
+        f"[green]Arquivados:[/green] {archived}  "
+        f"[yellow]já arquivados:[/yellow] {already}  [red]falhas:[/red] {failed}"
+    )
+
+
+@app.command("archive-one")
+def archive_one(
+    email_agent_ids: list[str] = typer.Argument(..., help="Um ou mais IDs (E-YYYYMMDD-NNNNNN)."),
+):
+    """Move e-mail(s) específico(s) para AI/Archive (sai da INBOX, recuperável)."""
+    from email_agent.actions.archive_actions import archive_message
+
+    for eid in email_agent_ids:
+        status = archive_message(eid)
+        if status == "archived":
+            console.print(f"[green]Arquivado:[/green] {eid}")
+        elif status == "already":
+            console.print(f"[yellow]Já arquivado (idempotente):[/yellow] {eid}")
+        else:
+            console.print(f"[red]Falha:[/red] {eid} — {status}")
 
 
 @app.command()
@@ -401,6 +509,34 @@ def relabel_all():
     from email_agent.workers.tasks_classify import classify_pending
 
     console.print(classify_pending())
+
+
+@relabel_app.command("reapply")
+def relabel_reapply(
+    sync: bool = typer.Option(False, "--sync", help="Roda já, sem fila (bom para ver o resultado)."),
+):
+    """Migração: reaplica a organização nos e-mails que JÁ têm label AI e ainda estão na
+    INBOX — labels de "sair" movem p/ pasta (ou removem INBOX no Gmail); as que ficam
+    (Importante/Aguardando) ganham keyword IMAP. Não reclassifica (não usa LLM)."""
+    from email_agent.workers.tasks_classify import reapply_organization, reapply_pending
+
+    if not sync:
+        console.print(reapply_pending())
+        return
+    # modo síncrono: aplica em ordem, mostra progresso
+    with db_session() as session:
+        rows = session.execute(
+            select(EmailMessage.id, EmailMessage.ai_labels).where(EmailMessage.mailbox == "INBOX")
+        ).all()
+    targets = [mid for mid, ai in rows if ai]
+    console.print(f"[cyan]{len(targets)} e-mail(s)[/cyan] na INBOX com label AI — reaplicando…")
+    done = 0
+    for mid in targets:
+        reapply_organization(mid)
+        done += 1
+        if done % 50 == 0:
+            console.print(f"  {done}/{len(targets)}")
+    console.print(f"[green]Reaplicado em {done} e-mail(s).[/green]")
 
 
 @relabel_app.command("message")
@@ -542,9 +678,50 @@ def train_stats():
 
     _kv_table("Por fonte", te["by_source"], "fonte")
     _kv_table("Por rótulo", te["by_label"], "rótulo")
+
+    # Prontidão por classe: onde o ML já tem rótulo confiável suficiente para decidir.
+    readiness = Table(title=f"Prontidão por classe (mínimo {te['min_events_per_class']}/classe)")
+    readiness.add_column("categoria"); readiness.add_column("eventos", justify="right")
+    readiness.add_column("pronta?", justify="center")
+    for cat, info in sorted(s["class_readiness"].items(), key=lambda kv: -kv[1]["count"]):
+        mark = "[green]sim[/green]" if info["ready"] else "[yellow]falta[/yellow]"
+        readiness.add_row(cat, str(info["count"]), mark)
+    console.print(readiness)
+
     _kv_table("Feedback por mudança de status (suas ações)", s["user_feedback_by_event"], "evento")
     _kv_table("Classificações automáticas por categoria", s["auto_classifications"]["by_category"], "categoria")
     _kv_table("Classificações automáticas por prioridade", s["auto_classifications"]["by_priority"], "prioridade")
+
+
+@train_app.command("eval")
+def train_eval(test_size: float = typer.Option(0.25, "--test-size")):
+    """Avalia (holdout) precision/recall/f1 por classe no dataset confiável atual.
+    Mede o quanto dá pra confiar no ML antes de subir o cutoff. Não treina os modelos
+    de produção — só cópias limpas para medir."""
+    from email_agent.intelligence.training import evaluate_models
+
+    res = evaluate_models(test_size=test_size)
+    if "error" in res:
+        console.print(f"[yellow]{res['error']}[/yellow]")
+        return
+    console.print(f"Amostras utilizáveis: {res['samples']}")
+
+    def _report(title: str, rep: dict) -> None:
+        if "error" in rep:
+            console.print(f"[yellow]{title}: {rep['error']}[/yellow]")
+            return
+        t = Table(title=f"{title} — acurácia {rep['accuracy']:.2f} "
+                  f"(treino {rep['train_size']} / teste {rep['test_size']})")
+        t.add_column("classe"); t.add_column("precision", justify="right")
+        t.add_column("recall", justify="right"); t.add_column("f1", justify="right")
+        t.add_column("suporte", justify="right")
+        for cls, m in rep["per_class"].items():
+            t.add_row(cls, f"{m['precision']:.2f}", f"{m['recall']:.2f}",
+                      f"{m['f1']:.2f}", str(m["support"]))
+        console.print(t)
+
+    _report("Spam (binário)", res["spam"])
+    _report("Categoria (multiclasse)", res["category"])
 
     def _estado(m):
         return "[green]treinado[/green]" if m["trained"] else "[yellow]ainda não treinado[/yellow]"
