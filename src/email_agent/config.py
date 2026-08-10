@@ -7,8 +7,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg://emailagent:emailagent@localhost:5433/emailagent"
-    app_timezone: str = "America/Bahia"
-
     evolution_base_url: str = ""
     evolution_api_key: str = ""
     evolution_instance_name: str = ""
@@ -17,15 +15,13 @@ class Settings(BaseSettings):
     gmail_oauth_client_secret_file: str = "/secrets/gmail_client_secret.json"
     gmail_token_storage_path: str = "/secrets/gmail_tokens"
 
-    ollama_base_url: str = "http://host.docker.internal:11434"
-    # Modelo base: classificação/resumo por e-mail (barato, roda muitas vezes).
-    ollama_model: str = "qwen3:8b"
-    # Modelo para tarefas mais complexas (ex.: priorização de P0). Vazio = usa o base.
-    ollama_model_reasoning: str = ""
-    llm_enabled: bool = True
+    # `ollama`, `openai_compatible` ou vazio/`disabled` para desligar.
+    llm_provider: str = "ollama"
+    llm_base_url: str = "http://host.docker.internal:11434"
+    llm_api_token: str = ""
+    llm_model: str = "qwen3:8b"
 
     default_sync_since_days: int = 365
-    default_bootstrap_mailboxes: str = "inbox,spam,sent"
     max_email_text_chars: int = 12000
 
     # Digest: e-mails mais antigos que isto não entram no resumo do WhatsApp.
@@ -45,12 +41,9 @@ class Settings(BaseSettings):
     def langfuse_enabled(self) -> bool:
         return bool(self.langfuse_public_key and self.langfuse_secret_key)
 
-    def model_for(self, task: str = "base") -> str:
-        """Modelo Ollama para uma task. 'reasoning' usa o modelo grande (com
-        fallback para o base); qualquer outra coisa usa o base."""
-        if task == "reasoning":
-            return self.ollama_model_reasoning or self.ollama_model
-        return self.ollama_model
+    @property
+    def llm_enabled(self) -> bool:
+        return self.llm_provider.strip().lower() not in {"", "disabled", "none"}
 
 
 @lru_cache

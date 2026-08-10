@@ -1,4 +1,4 @@
-"""Pipeline explícito de triagem: Ollama local → regras → safety gate → persistência.
+"""Pipeline explícito de triagem: LLM configurada → regras → safety gate → persistência.
 
 O nome do módulo é mantido apenas por ser o ponto de entrada do pipeline; não há
 mais LangGraph, modelos sklearn ou treinamento noturno.
@@ -7,7 +7,7 @@ from email_agent.actions.safety_gate import plan_safe_actions
 from email_agent.intelligence.followup import detect_followup_waiting_response
 from email_agent.intelligence.rule_agent import evaluate_rules_llm, load_rules_for_account
 from email_agent.intelligence.state import EmailAgentState
-from email_agent.intelligence.triage import triage_email
+from email_agent.intelligence.triage import TRIAGE_PROMPT_VERSION, triage_email
 from email_agent.models import EmailAccount, EmailClassification, EmailMessage, db_session
 
 
@@ -74,6 +74,15 @@ def classify_message(state: EmailAgentState) -> EmailAgentState:
         "suggested_labels": [],
         "needs_human_review": result.needs_human_review,
         "human_review_reason": result.reason if result.needs_human_review else None,
+        "llm_provider": result.llm_provider,
+        "llm_model": result.llm_model,
+        "llm_prompt_version": TRIAGE_PROMPT_VERSION,
+        "llm_raw_result": result.llm_raw_result,
+        "llm_raw_response": result.llm_raw_response,
+        "llm_input_tokens": result.llm_input_tokens,
+        "llm_output_tokens": result.llm_output_tokens,
+        "llm_latency_ms": result.llm_latency_ms,
+        "llm_error": result.llm_error,
     }
 
 
@@ -100,7 +109,7 @@ _PRIORITY_RANK = {"P0": 3, "P1": 2, "P2": 1, "ignore": 0}
 
 
 def apply_rules(state: EmailAgentState) -> EmailAgentState:
-    """Avalia apenas regras explícitas do usuário, também pelo Ollama local."""
+    """Avalia apenas regras explícitas do usuário pela LLM configurada."""
     with db_session() as session:
         account = session.get(EmailAccount, state["account_id"])
         rules = load_rules_for_account(session, account.email_address)
@@ -161,7 +170,15 @@ def persist_result(state: EmailAgentState) -> EmailAgentState:
                 cleanup_reason=state.get("cleanup_reason"),
                 digest_summary=state.get("digest_summary"),
                 suggested_labels=state.get("suggested_labels"),
-                model_name="ollama",
+                llm_provider=state.get("llm_provider"),
+                llm_model=state.get("llm_model"),
+                llm_prompt_version=state.get("llm_prompt_version"),
+                llm_raw_result=state.get("llm_raw_result"),
+                llm_raw_response=state.get("llm_raw_response"),
+                llm_input_tokens=state.get("llm_input_tokens"),
+                llm_output_tokens=state.get("llm_output_tokens"),
+                llm_latency_ms=state.get("llm_latency_ms"),
+                llm_error=state.get("llm_error"),
                 confidence=state.get("confidence"),
             )
         )

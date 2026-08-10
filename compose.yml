@@ -2,6 +2,7 @@ x-app-common: &app-common
   build: .
   env_file: .env
   environment:
+    DATABASE_URL: postgresql+psycopg://emailagent:emailagent@email-triage-db:5432/emailagent
     ACCOUNTS_FILE: /secrets/accounts.yml
     GMAIL_OAUTH_CLIENT_SECRET_FILE: /secrets/gmail_client_secret.json
     GMAIL_TOKEN_STORAGE_PATH: /secrets/gmail_tokens
@@ -17,16 +18,16 @@ x-app-common: &app-common
   networks:
     - default
   depends_on:
-    postgres:
+    email-triage-db:
       condition: service_healthy
 
 services:
-  app:
+  email-triage-app:
     <<: *app-common
     ports:
       - "127.0.0.1:8010:8000"
 
-  postgres:
+  email-triage-db:
     image: postgres:16
     restart: unless-stopped
     environment:

@@ -1,19 +1,21 @@
 # email-agent
 
-Assistente local para várias contas Gmail e IMAP. Sincroniza mensagens,
-classifica com Ollama, sugere uma fila conservadora de limpeza e mantém toda ação
-no provedor rastreável. A LLM nunca apaga e-mail; exclusão continua sendo uma
-decisão humana e recuperável via Lixeira.
+Assistente para várias contas Gmail e IMAP. Sincroniza mensagens, faz uma
+leitura estruturada por LLM, oferece busca local rápida e monta uma fila
+conservadora de limpeza. A IA nunca apaga e-mail; Lixeira e Arquivo exigem ação
+explícita do usuário.
 
 Roadmap e decisões de produto: [docs/REVISAO_E_ROADMAP_FOCO.md](docs/REVISAO_E_ROADMAP_FOCO.md).
 
 ## Stack atual
 
-Python 3.12 · FastAPI · PostgreSQL · SQLAlchemy/Alembic · Ollama local · Gmail
-API · IMAPClient · Typer/Rich · Langfuse opt-in.
+Python 3.12 · FastAPI · PostgreSQL 16 · SQLAlchemy/Alembic · Gmail API · IMAP ·
+Typer/Rich · adapter HTTP de LLM · Langfuse opt-in.
 
-Não há Celery, Valkey, workers, sklearn, treinamento noturno ou Label Studio.
-O fluxo é síncrono e uma falha em uma conta não interrompe as demais.
+Não há Celery, Valkey, workers, LangGraph, LangChain, sklearn, treinamento
+noturno ou Label Studio. O runtime normal tem apenas `email-triage-app` e
+`email-triage-db`; uma
+falha em uma conta não interrompe as demais.
 
 ## Configuração
 
@@ -21,91 +23,122 @@ O fluxo é síncrono e uma falha em uma conta não interrompe as demais.
 cp .env.example .env
 cp secrets/accounts.example.yml secrets/accounts.yml
 docker compose up -d --build
-docker compose exec app alembic upgrade head
-docker compose exec app email-agent accounts import-yaml
+docker compose exec email-triage-app alembic upgrade head
+docker compose exec email-triage-app email-agent accounts import-yaml
 ```
 
-`secrets/accounts.yml` é local, necessário para as credenciais IMAP e ignorado
-pelo Git. Não publique esse arquivo. Tokens Gmail ficam em
-`secrets/gmail_tokens/`.
+`secrets/accounts.yml` é obrigatório, local e ignorado pelo Git. Tokens Gmail
+ficam em `secrets/gmail_tokens/`. Não publique nem copie esses arquivos.
 
-Para autorizar uma conta Gmail, rode no host:
+## Provider de LLM
+
+O restante da aplicação não conhece SDKs de providers. Todas as chamadas passam
+por `intelligence/llm_client.py` e retornam o mesmo contrato estruturado.
+
+Ollama local:
+
+```dotenv
+LLM_PROVIDER=ollama
+LLM_BASE_URL=http://host.docker.internal:11434
+LLM_API_TOKEN=
+LLM_MODEL=gemma4:e2b-mlx
+```
+
+API compatível com OpenAI:
+
+```dotenv
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=https://api.openai.com
+LLM_API_TOKEN=troque-aqui
+LLM_MODEL=gpt-5-mini
+```
+
+Use `LLM_PROVIDER=disabled` para rodar sem inferência. Nesse caso, mensagens
+novas falham de forma conservadora para Revisar. Providers externos recebem o
+trecho do e-mail usado no prompt; Ollama local não envia esse conteúdo por si.
+
+Cada leitura principal é salva em `email_classification`, incluindo resultado
+JSON normalizado e bruto, provider, modelo, versão do prompt, latência, tokens e
+erro. Isso permite auditoria e reprocessamento sem depender do Langfuse.
+
+## PostgreSQL e busca
+
+A busca usa duas estratégias complementares, sem outro serviço:
+
+- full-text multilíngue com coluna `tsvector` gerada, pesos maiores para assunto
+  e remetente, e índice GIN;
+- fuzzy match com `pg_trgm` e índices GIN em assunto, nome e e-mail do remetente.
 
 ```bash
-GMAIL_OAUTH_CLIENT_SECRET_FILE=secrets/gmail_client_secret.json \
-GMAIL_TOKEN_STORAGE_PATH=secrets/gmail_tokens \
-DATABASE_URL=postgresql+psycopg://emailagent:emailagent@localhost:5433/emailagent \
-.venv/bin/email-agent gmail auth voce@gmail.com
+docker compose exec email-triage-app email-agent search -q "contrato renovação"
+docker compose exec email-triage-app email-agent search -q "nome com erro de digitacao"
+docker compose exec email-triage-app email-agent search --from fornecedor --category documento
 ```
+
+A migration também troca índices redundantes por índices alinhados às consultas:
+deduplicação por conta, thread+data, Message-ID por conta, digest por data,
+classificação única por mensagem, fila parcial de limpeza e revisão pendente.
+
+Busca semântica vetorial ainda não está habilitada. Ela exige `pgvector`, um
+modelo específico de embeddings e uma dimensão estável. Esses componentes não
+são usados atualmente; adicioná-los agora aumentaria stack e armazenamento sem
+produzir resultados. Full-text + trigram cobre busca por conteúdo e tolerância a
+typos. Embeddings entram quando houver uma consulta semântica concreta para
+medir recall e latência.
 
 ## Operação
 
 ```bash
-# Fluxo completo e síncrono: sync → triagem Ollama → digest
-docker compose exec app email-agent run
-docker compose exec app email-agent run --send
+# sync → leitura LLM → digest
+docker compose exec email-triage-app email-agent run
+docker compose exec email-triage-app email-agent run --send
 
-# Operações isoladas
-docker compose exec app email-agent sync all
-docker compose exec app email-agent sync all --bootstrap
-docker compose exec app email-agent relabel all
-docker compose exec app email-agent digest
-docker compose exec app email-agent show E-YYYYMMDD-NNNNNN
-docker compose exec app email-agent search --category marketing
+docker compose exec email-triage-app email-agent sync all
+docker compose exec email-triage-app email-agent sync all --bootstrap
+docker compose exec email-triage-app email-agent relabel all
+docker compose exec email-triage-app email-agent digest
+docker compose exec email-triage-app email-agent show E-YYYYMMDD-NNNNNN
 ```
 
-O agendamento é externo ao aplicativo. Durante desenvolvimento, rode `run`
-manualmente. A configuração de `launchd` entra quando os horários definitivos
-forem validados.
+O agendamento permanece externo ao aplicativo. Durante desenvolvimento, execute
+`run` manualmente.
 
 ## Triagem e limpeza
 
-Cada mensagem recebe uma única análise JSON do Ollama com categoria, prioridade,
-resumo, confiança, necessidade de ação e `cleanup_candidate`. A pré-seleção de
-limpeza é intencionalmente pouco sensível: só marketing, promoção, spam claro,
-aviso sem valor futuro ou follow-up sem ação podem ser sugeridos. Documento,
-cobrança, segurança, conversa pessoal, prazo, anexo relevante e qualquer dúvida
-nunca são pré-selecionados.
+Cada mensagem recebe categoria, prioridade, resumo, confiança, necessidade de
+ação e `cleanup_candidate`. A pré-seleção é deliberadamente pouco sensível: só
+marketing, promoção, spam claro, aviso sem valor futuro ou follow-up sem ação
+podem ser sugeridos. Documento, cobrança, segurança, conversa pessoal, prazo,
+anexo relevante e dúvida nunca são pré-selecionados.
 
-`cleanup_candidate` é dado local para a futura tela de revisão em lote. A
-triagem não cria label, não move a mensagem e não chama a Lixeira. Os únicos
-labels opcionais no provedor são `AI/Foco` e `AI/Spam Suspeito`.
+`cleanup_candidate` vive somente no PostgreSQL. A triagem não cria label, não
+move mensagem e não chama a Lixeira. Os únicos labels opcionais no provedor são
+`AI/Foco` e `AI/Spam Suspeito`.
 
 ## Arquivo
 
-- Gmail: arquivar remove somente `INBOX`.
-- IMAP: usa primeiro a pasta anunciada com `SPECIAL-USE \\Archive`; depois
-  reconhece `Archive`, `Archives` e `Arquivados`; se nenhuma existir, cria
-  `Archive` e a assina.
-- A descoberta evita duplicar a pasta `Archives` criada/reconhecida pelo Canary.
+- Gmail: remove somente `INBOX`.
+- IMAP: prioriza `SPECIAL-USE \\Archive`, reconhece `Archive`, `Archives` e
+  `Arquivados`, e cria `Archive` somente quando necessário.
 
 ## Langfuse
 
-É opt-in. Configure no `.env` para enviar traces à sua instância:
-
-```dotenv
-LANGFUSE_BASE_URL=https://seu-langfuse.example.com
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-```
-
-Sem as duas chaves, o cliente não é inicializado. O Ollama permanece local; ao
-ativar Langfuse, prompts e respostas observados passam a ser enviados à
-instância configurada.
+É opt-in. Sem `LANGFUSE_PUBLIC_KEY` e `LANGFUSE_SECRET_KEY`, o cliente não é
+inicializado. Ao ativá-lo, prompts e respostas são enviados à instância
+configurada, independentemente de o provider de inferência ser local.
 
 ## Segurança
 
 - O pipeline automático nunca apaga, expurga ou move para Trash/Spam.
-- O comando `delete` é explícito, mostra cada mensagem e move para a Lixeira,
-  sem expunge.
-- Toda ação automática permitida passa pelo safety gate com idempotência e log.
-- Falha ou baixa confiança da LLM vira revisão humana e nunca pré-seleção de
-  limpeza.
+- `delete` move para a Lixeira recuperável e exige decisão humana.
+- Ações no provedor têm idempotência e log.
+- Falha ou baixa confiança vira revisão e nunca pré-seleção de limpeza.
 
-## Testes
+## Verificação
 
 ```bash
-docker compose exec app pytest
-# ou
-.venv/bin/pytest
+docker compose exec email-triage-app alembic current
+docker compose exec email-triage-app ruff check src tests migrations
+docker compose exec email-triage-app pytest
+curl -fsSL http://127.0.0.1:8010/health
 ```

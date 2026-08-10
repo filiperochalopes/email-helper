@@ -1,3 +1,7 @@
+from types import SimpleNamespace
+
+from email_agent.intelligence import triage
+from email_agent.intelligence.llm_client import LLMCallResult
 from email_agent.intelligence.triage import normalize_triage
 
 
@@ -40,3 +44,33 @@ def test_invalid_llm_response_fails_to_review():
     assert result.category == "revisar"
     assert result.cleanup_candidate is False
     assert result.needs_human_review is True
+
+
+def test_triage_carries_llm_audit_metadata(monkeypatch):
+    payload = {
+        "category": "marketing", "priority": "P2", "confidence": 0.9,
+        "cleanup_candidate": True, "summary": "Oferta", "reason": "Marketing",
+    }
+    monkeypatch.setattr(
+        triage,
+        "generate_json",
+        lambda *a, **k: LLMCallResult(
+            payload, "openai_compatible", "modelo-x", raw_response='{"category":"marketing"}',
+            input_tokens=100, output_tokens=20, latency_ms=321,
+        ),
+    )
+    monkeypatch.setattr(
+        triage,
+        "get_settings",
+        lambda: SimpleNamespace(max_email_text_chars=1000, llm_min_confidence=0.6),
+    )
+    result = triage.triage_email(
+        account_email="conta@example.com", mailbox="INBOX", from_email="loja@example.com",
+        from_name="Loja", subject="Oferta", body="Promoção", attachments=[],
+        in_provider_spam=False, is_sent_by_user=False,
+    )
+    assert result.llm_provider == "openai_compatible"
+    assert result.llm_model == "modelo-x"
+    assert result.llm_raw_result == payload
+    assert result.llm_input_tokens == 100
+    assert result.llm_latency_ms == 321

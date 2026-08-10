@@ -31,6 +31,15 @@ class EmailAgentState(TypedDict, total=False):
     priority: Literal["P0", "P1", "P2", "ignore"]
     category: str
     confidence: float
+    llm_provider: str
+    llm_model: str
+    llm_prompt_version: str
+    llm_raw_result: dict[str, Any] | None
+    llm_raw_response: str
+    llm_input_tokens: int | None
+    llm_output_tokens: int | None
+    llm_latency_ms: int | None
+    llm_error: str | None
     action_required: bool
     cleanup_candidate: bool
     cleanup_reason: str | None

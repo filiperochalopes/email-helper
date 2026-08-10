@@ -1,7 +1,7 @@
 [project]
 name = "email-agent"
 version = "0.1.0"
-description = "Agente de monitoramento, classificação e organização de múltiplas contas de e-mail (Gmail API + IMAP), com resumo matinal via WhatsApp (Evolution API)."
+description = "Assistente local de foco e limpeza de múltiplas contas de e-mail, com busca PostgreSQL e LLM configurável."
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
@@ -22,7 +22,6 @@ dependencies = [
     "rich>=13.7",
     "readchar>=4.1",
     "ruamel.yaml>=0.18",
-    "python-dateutil>=2.9",
     "pyyaml>=6.0",
     "structlog>=24.1",
     "langfuse>=4,<5",
@@ -31,7 +30,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2",
-    "pytest-asyncio>=0.23",
     "ruff>=0.5",
 ]
 

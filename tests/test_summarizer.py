@@ -1,6 +1,6 @@
 import pytest
 
-from email_agent.intelligence.ollama_client import parse_json_response
+from email_agent.intelligence.llm_client import parse_json_response
 
 
 def test_parse_plain_json():

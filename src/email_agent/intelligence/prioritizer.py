@@ -10,7 +10,7 @@ Quando o digest tem mais P0 do que cabe na mensagem, uma 2ª passada usa o model
 """
 from datetime import UTC, datetime
 
-from email_agent.intelligence.ollama_client import generate_json
+from email_agent.intelligence.llm_client import generate_json
 from email_agent.logging_setup import get_logger
 from email_agent.models import EmailClassification, EmailMessage
 
@@ -77,12 +77,12 @@ def prioritize_p0(pairs: list[tuple]) -> list[tuple]:
     if len(pairs) < 2:
         return pairs
     metas = [_meta(m, c) for m, c in pairs]
-    data = generate_json(
+    call = generate_json(
         PROMPT.format(block=_block(metas)), task="reasoning", temperature=0.0,
         trace_name="prioritize_p0",
         trace_metadata={"emails_count": len(pairs)},
     )
-    order = (data or {}).get("order") if isinstance(data, dict) else None
+    order = call.data.get("order") if call.data else None
     if not order or not isinstance(order, list):
         return pairs
     log.info("p0_prioritized", count=len(pairs))

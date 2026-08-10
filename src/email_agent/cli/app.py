@@ -84,6 +84,10 @@ def _print_summary(msg: EmailMessage, cls: EmailClassification | None) -> None:
         t.add_row("Categoria sugerida", cls.category or "—")
         t.add_row("Resumo", cls.digest_summary or (msg.snippet or "")[:160])
         t.add_row("Motivo", (cls.importance_reason or "")[:200])
+        provider = getattr(cls, "llm_provider", None)
+        model = getattr(cls, "llm_model", None)
+        if provider or model:
+            t.add_row("Leitura IA", f"{provider or '?'} / {model or '?'}")
     console.print(t)
     console.print()
 
@@ -171,6 +175,7 @@ def _record_label_event(msg: EmailMessage, previous: list, new: list, event: str
 
 @app.command()
 def search(
+    query: str = typer.Option(None, "--query", "-q", help="Texto livre com full-text e fuzzy match."),
     label: str = typer.Option(None, "--label"),
     from_: str = typer.Option(None, "--from"),
     subject: str = typer.Option(None, "--subject"),
@@ -178,29 +183,25 @@ def search(
     priority: str = typer.Option(None, "--priority"),
     limit: int = typer.Option(20, "--limit"),
 ):
-    """Busca mensagens para descobrir IDs."""
+    """Busca e-mails por conteúdo, remetente, assunto ou classificação."""
+    from email_agent.search import email_search_statement
+
     with db_session() as session:
-        q = (
-            select(EmailMessage, EmailClassification)
-            .outerjoin(EmailClassification, EmailClassification.message_id == EmailMessage.id)
-            .order_by(EmailMessage.id.desc())
-            .limit(limit * 5)
+        q = email_search_statement(
+            query=query,
+            from_email=from_,
+            subject=subject,
+            category=category,
+            priority=priority,
+            limit=limit * 5 if label else limit,
         )
-        if from_:
-            q = q.where(EmailMessage.from_email.ilike(f"%{from_}%"))
-        if subject:
-            q = q.where(EmailMessage.subject.ilike(f"%{subject}%"))
-        if category:
-            q = q.where(EmailClassification.category == category)
-        if priority:
-            q = q.where(EmailClassification.priority == priority)
         rows = session.execute(q).all()
 
     t = Table()
     for col in ("ID", "De", "Assunto", "Categoria", "Prio", "Labels"):
         t.add_column(col)
     shown = 0
-    for msg, cls in rows:
+    for msg, cls, _relevance in rows:
         if label and label not in (msg.ai_labels or []):
             continue
         t.add_row(
@@ -240,6 +241,16 @@ def show(
                 "category": cls.category if cls else None,
                 "summary": (cls.digest_summary if cls else None) or (msg.snippet or "")[:160],
                 "reason": (cls.importance_reason if cls else "") or "",
+                "llm": {
+                    "provider": getattr(cls, "llm_provider", None),
+                    "model": getattr(cls, "llm_model", None),
+                    "prompt_version": getattr(cls, "llm_prompt_version", None),
+                    "input_tokens": getattr(cls, "llm_input_tokens", None),
+                    "output_tokens": getattr(cls, "llm_output_tokens", None),
+                    "latency_ms": getattr(cls, "llm_latency_ms", None),
+                    "error": getattr(cls, "llm_error", None),
+                    "result": getattr(cls, "llm_raw_result", None),
+                } if cls else None,
                 "body": (msg.normalized_text or msg.snippet or "")[:4000],
             }, default=str))
             continue
@@ -419,8 +430,9 @@ def sync_once(account: str = typer.Option(..., "--account")):
             console.print(f"[red]Conta não cadastrada no banco:[/red] {account}")
             console.print(
                 "Importe as contas declaradas em secrets/accounts.yml e tente novamente:\n"
-                "  [bold]docker compose exec app email-agent accounts import-yaml[/bold]\n"
-                f"  [bold]docker compose exec app email-agent sync once --account {account}[/bold]"
+                "  [bold]docker compose exec email-triage-app email-agent accounts import-yaml[/bold]\n"
+                f"  [bold]docker compose exec email-triage-app email-agent sync once --account {account}[/bold]",
+                soft_wrap=True,
             )
             all_accs = session.execute(select(EmailAccount)).scalars().all()
             if all_accs:
@@ -561,7 +573,7 @@ def gmail_auth(email: str):
     console.print(f"[green]OAuth concluído para {email}.[/green] Token salvo.")
 
     # auth_status no banco é best-effort: se o DB não estiver acessível do host
-    # (ex.: host 'postgres' não resolve fora do Docker), não perdemos o token — o
+    # (ex.: host 'email-triage-db' não resolve fora do Docker), não perdemos o token — o
     # próximo sync atualiza o status.
     try:
         with db_session() as session:
@@ -574,16 +586,18 @@ def gmail_auth(email: str):
                 console.print(
                     f"[yellow]A conta {email} ainda não está cadastrada no banco.[/yellow]\n"
                     "Conclua com:\n"
-                    "  [bold]docker compose exec app email-agent accounts import-yaml[/bold]\n"
-                    f"  [bold]docker compose exec app email-agent sync once --account {email}[/bold]"
+                    "  [bold]docker compose exec email-triage-app email-agent accounts import-yaml[/bold]\n"
+                    f"  [bold]docker compose exec email-triage-app email-agent sync once --account {email}[/bold]",
+                    soft_wrap=True,
                 )
     except Exception as exc:  # noqa: BLE001
         console.print(
             f"[yellow]Token salvo.[/yellow] Não marquei auth_status=ok no banco a partir do "
-            f"host ({exc.__class__.__name__} — 'postgres' só resolve dentro do Docker).\n"
+            f"host ({exc.__class__.__name__} — 'email-triage-db' só resolve dentro do Docker).\n"
             "Importe a declaração da conta e rode o sync no container:\n"
-            "  [bold]docker compose exec app email-agent accounts import-yaml[/bold]\n"
-            f"  [bold]docker compose exec app email-agent sync once --account {email}[/bold]"
+            "  [bold]docker compose exec email-triage-app email-agent accounts import-yaml[/bold]\n"
+            f"  [bold]docker compose exec email-triage-app email-agent sync once --account {email}[/bold]",
+            soft_wrap=True,
         )
 
 

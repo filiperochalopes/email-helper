@@ -1,47 +1,49 @@
-# Modelos LLM (Ollama)
+# Providers e modelos de LLM
 
-O agente usa **Ollama local** (nativo no host macOS; containers acessam via
-`host.docker.internal:11434`). A inferência não usa APIs externas. Langfuse é
-opt-in: quando suas chaves estão configuradas, prompts e respostas são enviados
-à instância informada para observabilidade.
+Todas as chamadas estruturadas passam por
+`intelligence/llm_client.generate_json()`. O adapter devolve `LLMCallResult`,
+independentemente do provider:
 
-## Dois modelos, por tarefa
+- `data`: JSON validado pelo parser;
+- `provider` e `model`;
+- resposta textual bruta;
+- tokens de entrada/saída, quando o provider informa;
+- latência e erro.
 
-Toda chamada passa por `intelligence/ollama_client.generate_json(prompt, task=...)`, que
-escolhe o modelo conforme a tarefa via `settings.model_for(task)`:
+## Configuração única
 
-| Variável de ambiente      | `task`        | Onde é usado                                   | Sugestão de modelo |
-|---------------------------|---------------|------------------------------------------------|--------------------|
-| `OLLAMA_MODEL`            | `base`        | Classificação/resumo por e-mail (roda muito):  | `gemma4:e2b-mlx`   |
-|                           |               | `triage`, `rule_agent`                         |                    |
-| `OLLAMA_MODEL_REASONING`  | `reasoning`   | Tarefas complexas que rodam pouco:             | `gemma4:e4b-mlx`   |
-|                           |               | `prioritizer` (ranking de P0)                  |                    |
-
-- `OLLAMA_MODEL_REASONING` **vazio** ⇒ cai para o `OLLAMA_MODEL` (sem custo extra de setup).
-- `LLM_ENABLED=false` desliga todas as chamadas (úteis em testes/CI).
-
-Exemplo de `.env`:
-
-```env
-OLLAMA_BASE_URL=http://host.docker.internal:11434
-OLLAMA_MODEL=gemma4:e2b-mlx
-OLLAMA_MODEL_REASONING=gemma4:e4b-mlx
-LLM_ENABLED=true
+```dotenv
+LLM_PROVIDER=ollama
+LLM_BASE_URL=http://host.docker.internal:11434
+LLM_API_TOKEN=
+LLM_MODEL=gemma4:e2b-mlx
 ```
 
-Baixe os dois no host: `ollama pull gemma4:e2b-mlx && ollama pull gemma4:e4b-mlx`.
+Valores aceitos para `LLM_PROVIDER`:
 
-## Como adicionar uma nova tarefa com modelo dedicado
+- `ollama`: usa `POST /api/generate`, JSON mode e Ollama no host ou rede;
+- `openai_compatible` ou `openai`: usa `POST /v1/chat/completions` com
+  `response_format=json_object`;
+- `disabled`, `none` ou vazio: não chama LLM e envia a mensagem para Revisar.
 
-1. Em `config.py`, adicione (se quiser um 3º modelo) um campo `ollama_model_<task>` e trate-o
-   em `Settings.model_for`.
-2. Na sua função, chame `generate_json(prompt, task="<nome>")`.
+O mesmo modelo atende triagem, regras e priorização. Isso reduz configuração e
+torna custo/latência mensuráveis antes de reintroduzir roteamento por tarefa.
 
-O pipeline síncrono seleciona o modelo pela tarefa ao chamar o cliente Ollama.
+## Persistência
 
-## Priorização de P0 (`intelligence/prioritizer.py`)
+A leitura principal de cada e-mail é armazenada em `email_classification`:
 
-Quando o digest tem mais de `PRIORITIZE_THRESHOLD` (5) itens P0, uma segunda passada usa o
-modelo `reasoning` para reordenar por urgência real: resposta minha obrigatória/iminente >
-conversa pessoal (não-empresa) > recência. É **consultivo** — qualquer falha mantém a ordem
-por `importance_score`.
+- categoria, prioridade, confiança, resumo e motivo;
+- `cleanup_candidate` e justificativa;
+- `llm_provider`, `llm_model` e `llm_prompt_version`;
+- `llm_raw_result` e `llm_raw_response`;
+- `llm_input_tokens`, `llm_output_tokens`, `llm_latency_ms` e `llm_error`.
+
+O resultado local não depende do Langfuse. Langfuse complementa a auditoria com
+traces e é opt-in; quando ativo, recebe prompts e respostas.
+
+## Privacidade
+
+Ollama local mantém a inferência na máquina. Um provider
+`openai_compatible` externo recebe o trecho de corpo incluído no prompt.
+`MAX_EMAIL_TEXT_CHARS` limita esse trecho, mas não o anonimiza.

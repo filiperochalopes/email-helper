@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from email_agent.intelligence import prioritizer
+from email_agent.intelligence.llm_client import LLMCallResult
 
 
 def _pair(eid, score=0):
@@ -32,14 +33,20 @@ def test_apply_order_dedups_repeated_ids():
 
 def test_prioritize_p0_falls_back_when_llm_unavailable(monkeypatch):
     pairs = [_pair("E-1", 10), _pair("E-2", 90), _pair("E-3", 50)]
-    monkeypatch.setattr(prioritizer, "generate_json", lambda *a, **k: None)
+    monkeypatch.setattr(
+        prioritizer, "generate_json",
+        lambda *a, **k: LLMCallResult(None, "disabled", ""),
+    )
     assert prioritizer.prioritize_p0(pairs) == pairs
 
 
 def test_prioritize_p0_applies_llm_order(monkeypatch):
     pairs = [_pair("E-1"), _pair("E-2"), _pair("E-3")]
     monkeypatch.setattr(
-        prioritizer, "generate_json", lambda *a, **k: {"order": ["E-2", "E-3", "E-1"]}
+        prioritizer, "generate_json",
+        lambda *a, **k: LLMCallResult(
+            {"order": ["E-2", "E-3", "E-1"]}, "ollama", "modelo"
+        ),
     )
     out = prioritizer.prioritize_p0(pairs)
     assert [m.email_agent_id for m, _ in out] == ["E-2", "E-3", "E-1"]
@@ -50,7 +57,7 @@ def test_prioritize_p0_single_item_skips_llm(monkeypatch):
 
     def _boom(*a, **k):
         called["n"] += 1
-        return {"order": []}
+        return LLMCallResult({"order": []}, "ollama", "modelo")
 
     monkeypatch.setattr(prioritizer, "generate_json", _boom)
     pairs = [_pair("E-1")]

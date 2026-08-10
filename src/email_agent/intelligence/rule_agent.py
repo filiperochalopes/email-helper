@@ -3,14 +3,14 @@
 As regras são cadastradas em secrets/rules.yml (descrição em pt-BR + resultado) e
 ficam em email_rule. Para cada e-mail, carregamos as regras da conta (+ globais) e
 fazemos UMA chamada ao LLM passando todas as regras numeradas. O LLM diz quais se
-aplicam e a prioridade resultante. A inferência roda no Ollama local; o Langfuse
-opt-in pode exportar o trace para a instância configurada.
+aplicam e a prioridade resultante. A inferência usa o provider configurado; o
+Langfuse opt-in pode exportar o trace para a instância configurada.
 """
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from email_agent.config import get_settings
-from email_agent.intelligence.ollama_client import generate_json
+from email_agent.intelligence.llm_client import generate_json
 from email_agent.logging_setup import get_logger
 from email_agent.models import EmailRule
 
@@ -61,16 +61,16 @@ def evaluate_rules_llm(account_email: str, subject: str, from_email: str, body: 
         rules_block=rules_block, from_email=from_email or "?",
         subject=subject or "(sem assunto)", body=(body or "")[:4000],
     )
-    data = generate_json(
+    call = generate_json(
         prompt, task="base", temperature=0.0,
         trace_name="apply_rules",
         trace_metadata={"account": account_email, "rules_count": len(rules)},
     )
-    if not data:
+    if not call.data:
         return []
 
     outcomes = []
-    for match in data.get("matches", []):
+    for match in call.data.get("matches", []):
         if not match.get("applies"):
             continue
         idx = match.get("rule", 0)
