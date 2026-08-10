@@ -61,7 +61,7 @@ def move_to_ai_folder(account: EmailAccount, msg: EmailMessage, label: str) -> s
     return dest
 
 
-def move_to_trash(account: EmailAccount, msg: EmailMessage) -> None:
+def move_to_trash(account: EmailAccount, msg: EmailMessage) -> str:
     """Move a mensagem para a pasta Trash do servidor (recuperável).
 
     Só é chamado pelo comando CLI `delete`, com confirmação humana — nunca pelo
@@ -73,6 +73,7 @@ def move_to_trash(account: EmailAccount, msg: EmailMessage) -> None:
         uid = int(msg.provider_message_id.split(":")[-1])
         _move_uid(client, msg.mailbox, uid, trash)
         log.info("imap_trashed", account=account.email_address, folder=trash, uid=uid)
+        return trash
 
 
 def move_to_archive(account: EmailAccount, msg: EmailMessage) -> str:

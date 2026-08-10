@@ -20,6 +20,7 @@ htmlcov/
 
 # Dados gerados
 *.log
+node_modules/
 
 # macOS / IDE
 .DS_Store

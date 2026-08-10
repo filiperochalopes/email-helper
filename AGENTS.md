@@ -8,7 +8,9 @@ Operação: [README.md](README.md).
 ## Arquitetura (resumo)
 
 - `src/email_agent/` — pacote único; entrypoints: API FastAPI (`api/app.py`) e
-  CLI Typer (`cli/app.py`, comando `email-agent`). Não há broker nem workers.
+  CLI Typer (`cli/app.py`, comando `email-agent`). A web local usa HTML/JS e
+  Tailwind compilado em `web/`; Node é somente ferramenta de build. Não há broker
+  nem workers.
 - Fluxo: sync (`sync/`) → persistência+dedup (`sync/persist.py`) → triagem pela
   LLM configurada → regras por conta → safety gate → ações via `actions/`.
 - Models SQLAlchemy todos em `models/entities.py` (consolidado de propósito — facilita
@@ -91,6 +93,8 @@ Toda mudança em `models/entities.py` exige migration:
 `docker compose exec email-triage-app alembic revision --autogenerate -m "..."` + revisar o arquivo gerado.
 
 Novos comportamentos de triagem devem ganhar teste em `tests/test_triage.py`.
+Endpoints e ações da web devem ganhar teste em `tests/test_api_cleanup.py`.
+Ao alterar classes Tailwind em `web/`, rodar `npm run build:css` e versionar o CSS.
 Rodar a suíte inteira antes de concluir.
 
 ## Infraestrutura compartilhada

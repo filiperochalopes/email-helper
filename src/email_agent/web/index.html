@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Email Triage — Limpeza</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%2317221e'/%3E%3Cpath d='M15 21l17 12 17-12M17 47h30a3 3 0 0 0 3-3V20a3 3 0 0 0-3-3H17a3 3 0 0 0-3 3v24a3 3 0 0 0 3 3z' fill='none' stroke='%23fff' stroke-width='4'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/static/app.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body class="min-h-screen bg-stone-50 font-sans text-ink-950 antialiased">
+    <header class="sticky top-0 z-30 border-b border-stone-200/80 bg-stone-50/90 backdrop-blur-xl">
+      <div class="mx-auto flex max-w-6xl items-center justify-between gap-5 px-4 py-3 sm:px-6 lg:px-8">
+        <a href="/" class="flex items-center gap-3" aria-label="Email Triage">
+          <span class="grid size-10 place-items-center rounded-2xl bg-ink-950 text-white shadow-lg shadow-mint-500/15">
+            <svg viewBox="0 0 24 24" class="size-5" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+              <path d="M4 7.5 12 13l8-5.5M5.5 19h13A1.5 1.5 0 0 0 20 17.5v-11A1.5 1.5 0 0 0 18.5 5h-13A1.5 1.5 0 0 0 4 6.5v11A1.5 1.5 0 0 0 5.5 19Z" />
+            </svg>
+          </span>
+          <span>
+            <span class="block text-sm font-semibold tracking-tight">Email Triage</span>
+            <span class="block text-xs text-ink-700">local e sob seu controle</span>
+          </span>
+        </a>
+
+        <nav class="flex rounded-xl border border-stone-200 bg-white p-1 text-sm shadow-sm" aria-label="Áreas">
+          <button class="rounded-lg px-3 py-1.5 text-stone-400" disabled>Foco</button>
+          <button class="rounded-lg bg-ink-950 px-3 py-1.5 font-medium text-white">Limpeza</button>
+          <button class="rounded-lg px-3 py-1.5 text-stone-400" disabled>Compose</button>
+        </nav>
+      </div>
+    </header>
+
+    <main class="mx-auto max-w-6xl px-4 pb-40 pt-10 sm:px-6 lg:px-8">
+      <section class="grid items-end gap-7 lg:grid-cols-[1fr_auto]">
+        <div>
+          <div class="mb-3 inline-flex items-center gap-2 rounded-full border border-mint-500/20 bg-mint-50 px-3 py-1 text-xs font-semibold text-mint-700">
+            <span class="size-1.5 rounded-full bg-mint-500"></span>
+            Revisão humana em lote
+          </div>
+          <h1 class="max-w-3xl text-3xl font-semibold tracking-[-0.035em] sm:text-5xl">
+            Menos ruído, sem decisões apressadas.
+          </h1>
+          <p class="mt-4 max-w-2xl text-base leading-7 text-ink-700">
+            A IA pré-seleciona apenas mensagens de baixo risco. Confira o contexto,
+            ajuste a seleção e execute uma única ação quando estiver seguro.
+          </p>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="min-w-32 rounded-2xl border border-stone-200 bg-white p-4 shadow-panel">
+            <span class="block text-xs font-medium uppercase tracking-wider text-stone-500">Encontrados</span>
+            <strong id="total-count" class="mt-1 block text-2xl font-semibold tabular-nums">—</strong>
+          </div>
+          <div class="min-w-32 rounded-2xl bg-ink-950 p-4 text-white shadow-panel">
+            <span class="block text-xs font-medium uppercase tracking-wider text-stone-300">Selecionados</span>
+            <strong id="hero-selected-count" class="mt-1 block text-2xl font-semibold tabular-nums">0</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="mt-10 rounded-3xl border border-stone-200/80 bg-white/80 p-3 shadow-panel backdrop-blur sm:p-4">
+        <div class="flex flex-col gap-3 lg:flex-row">
+          <label class="relative min-w-0 flex-1">
+            <span class="sr-only">Buscar mensagens</span>
+            <svg viewBox="0 0 24 24" class="pointer-events-none absolute left-3.5 top-3.5 size-4 text-stone-400" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" />
+            </svg>
+            <input id="search-input" class="filter-control w-full pl-10" type="search" placeholder="Buscar assunto, remetente ou conteúdo…" autocomplete="off" />
+          </label>
+          <select id="account-filter" class="filter-control lg:max-w-64" aria-label="Filtrar por conta">
+            <option value="">Todas as contas</option>
+          </select>
+          <select id="category-filter" class="filter-control lg:max-w-52" aria-label="Filtrar por categoria">
+            <option value="">Todas as categorias</option>
+            <option value="marketing">Marketing</option>
+            <option value="promocao">Promoção</option>
+            <option value="spam_suspeito">Spam suspeito</option>
+            <option value="followup_sem_acao">Follow-up sem ação</option>
+            <option value="ignorar">Ignorar</option>
+            <option value="noticia">Notícia</option>
+            <option value="documento">Documento</option>
+          </select>
+        </div>
+
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-stone-100 pt-3">
+          <div id="mode-tabs" class="flex rounded-xl bg-stone-100 p-1 text-sm">
+            <button data-mode="candidates" class="mode-tab rounded-lg bg-white px-3 py-2 font-medium text-ink-950 shadow-sm">Sugestões da IA</button>
+            <button data-mode="all" class="mode-tab rounded-lg px-3 py-2 text-ink-700">Todos da Inbox</button>
+          </div>
+          <button id="select-visible" class="rounded-xl px-3 py-2 text-sm font-medium text-mint-700 transition hover:bg-mint-50">
+            Selecionar carregados
+          </button>
+        </div>
+      </section>
+
+      <section class="mt-6" aria-live="polite" aria-busy="false" id="results-section">
+        <div id="loading-state" class="space-y-3">
+          <div class="h-32 animate-pulse rounded-2xl bg-stone-200/70"></div>
+          <div class="h-32 animate-pulse rounded-2xl bg-stone-200/60"></div>
+          <div class="h-32 animate-pulse rounded-2xl bg-stone-200/50"></div>
+        </div>
+
+        <div id="empty-state" class="hidden rounded-3xl border border-dashed border-stone-300 bg-white/70 px-6 py-16 text-center">
+          <span class="mx-auto grid size-12 place-items-center rounded-2xl bg-mint-100 text-mint-700">
+            <svg viewBox="0 0 24 24" class="size-6" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+              <path d="m7 12 3 3 7-7" /><circle cx="12" cy="12" r="9" />
+            </svg>
+          </span>
+          <h2 class="mt-4 text-lg font-semibold">Nada para revisar aqui</h2>
+          <p class="mt-1 text-sm text-ink-700">Tente outro filtro ou consulte todos os e-mails da Inbox.</p>
+        </div>
+
+        <div id="message-list" class="space-y-3"></div>
+        <div id="load-sentinel" class="h-2"></div>
+        <button id="load-more" class="mx-auto mt-6 hidden rounded-xl border border-stone-200 bg-white px-5 py-2.5 text-sm font-medium shadow-sm transition hover:border-mint-500/40 hover:bg-mint-50">
+          Carregar mais
+        </button>
+      </section>
+    </main>
+
+    <div id="action-bar" class="fixed inset-x-0 bottom-0 z-40 translate-y-full px-4 pb-4 transition-transform duration-300 sm:px-6" aria-hidden="true" inert>
+      <div class="mx-auto flex max-w-3xl flex-col items-center justify-between gap-3 rounded-2xl border border-white/10 bg-ink-950 p-3 text-white shadow-2xl shadow-black/30 sm:flex-row sm:rounded-full sm:pl-5">
+        <div class="flex items-center gap-3">
+          <span class="grid size-9 place-items-center rounded-full bg-white/10 text-sm font-semibold tabular-nums" id="bar-selected-count">0</span>
+          <span class="text-sm text-stone-200">mensagens prontas para uma ação</span>
+        </div>
+        <div class="flex w-full gap-2 sm:w-auto">
+          <button data-action="archive" class="bulk-trigger flex-1 rounded-full bg-white/10 px-5 py-2.5 text-sm font-semibold transition hover:bg-white/20">Arquivar</button>
+          <button data-action="trash" class="bulk-trigger flex-1 rounded-full bg-red-500 px-5 py-2.5 text-sm font-semibold transition hover:bg-red-400">Mover à Lixeira</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirm-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-ink-950/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+        <span id="modal-icon" class="grid size-11 place-items-center rounded-2xl bg-mint-100 text-mint-700"></span>
+        <h2 id="modal-title" class="mt-5 text-xl font-semibold tracking-tight">Confirmar ação</h2>
+        <p id="modal-copy" class="mt-2 text-sm leading-6 text-ink-700"></p>
+        <p class="mt-3 rounded-xl bg-stone-100 px-3 py-2 text-xs leading-5 text-stone-600">
+          A ação é aplicada item a item. Falhas em uma conta não interrompem as demais e ficam registradas.
+        </p>
+        <div class="mt-6 flex justify-end gap-2">
+          <button id="modal-cancel" class="rounded-xl px-4 py-2.5 text-sm font-medium text-ink-700 hover:bg-stone-100">Cancelar</button>
+          <button id="modal-confirm" class="rounded-xl bg-ink-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-ink-700">Confirmar</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="fixed right-4 top-20 z-[60] hidden max-w-sm rounded-2xl border border-stone-200 bg-white px-4 py-3 text-sm shadow-2xl sm:right-6"></div>
+  </body>
+</html>

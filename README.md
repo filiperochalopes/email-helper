@@ -61,6 +61,33 @@ Cada leitura principal é salva em `email_classification`, incluindo resultado
 JSON normalizado e bruto, provider, modelo, versão do prompt, latência, tokens e
 erro. Isso permite auditoria e reprocessamento sem depender do Langfuse.
 
+## Web local
+
+A fila de limpeza está disponível em [http://127.0.0.1:8010](http://127.0.0.1:8010).
+Ela oferece busca, filtros por conta/categoria, carregamento progressivo, modo
+`Sugestões da IA` e modo `Todos da Inbox`. Candidatos conservadores chegam
+pré-selecionados; o usuário pode corrigir a seleção antes de Arquivar ou mover
+até 200 mensagens por vez para a Lixeira recuperável.
+
+Classificações do pipeline antigo não têm `cleanup_candidate`. Antes de
+reprocessar em lote, valide uma mensagem com o modelo configurado:
+
+```bash
+docker compose exec email-triage-app email-agent relabel message --id E-YYYYMMDD-NNNNNN
+docker compose exec email-triage-app email-agent relabel legacy --limit 40
+```
+
+Repita o segundo comando em lotes confortáveis para o hardware local. Nenhum
+desses comandos arquiva ou apaga mensagens; apenas atualiza a leitura no banco.
+
+Tailwind é compilado em desenvolvimento e o CSS gerado é servido pelo FastAPI;
+Node não faz parte do runtime:
+
+```bash
+npm install
+npm run build:css
+```
+
 ## PostgreSQL e busca
 
 A busca usa duas estratégias complementares, sem outro serviço:
@@ -96,6 +123,7 @@ docker compose exec email-triage-app email-agent run --send
 docker compose exec email-triage-app email-agent sync all
 docker compose exec email-triage-app email-agent sync all --bootstrap
 docker compose exec email-triage-app email-agent relabel all
+docker compose exec email-triage-app email-agent relabel legacy --limit 40
 docker compose exec email-triage-app email-agent digest
 docker compose exec email-triage-app email-agent show E-YYYYMMDD-NNNNNN
 ```

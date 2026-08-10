@@ -31,6 +31,7 @@ def _archive_in_session(session: Session, msg: EmailMessage) -> str:
 
             archive(account, msg.provider_message_id)
             msg.raw_labels = [label for label in (msg.raw_labels or []) if label != "INBOX"]
+            msg.mailbox = "ARCHIVE"
         else:
             from email_agent.actions.imap_actions import move_to_archive
 

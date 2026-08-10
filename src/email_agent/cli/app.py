@@ -466,6 +466,16 @@ def relabel_message(id: str = typer.Option(..., "--id")):
     console.print({k: state.get(k) for k in ("category", "priority", "suggested_labels")})
 
 
+@relabel_app.command("legacy")
+def relabel_legacy(
+    limit: int = typer.Option(40, "--limit", min=1, max=500),
+):
+    """Reprocessa um lote da Inbox ainda classificado pelo pipeline antigo."""
+    from email_agent.sync.service import reclassify_legacy_inbox
+
+    console.print(reclassify_legacy_inbox(limit=limit))
+
+
 # ---------- rules ----------
 
 @rules_app.command("import-yaml")

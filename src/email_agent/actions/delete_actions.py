@@ -37,10 +37,16 @@ def trash_message(email_agent_id: str) -> str:
                 from email_agent.actions.gmail_actions import trash as gmail_trash
 
                 gmail_trash(account, msg.provider_message_id)
+                msg.raw_labels = [
+                    label for label in (msg.raw_labels or []) if label != "INBOX"
+                ]
+                if "TRASH" not in msg.raw_labels:
+                    msg.raw_labels.append("TRASH")
+                msg.mailbox = "TRASH"
             else:
                 from email_agent.actions.imap_actions import move_to_trash
 
-                move_to_trash(account, msg)
+                msg.mailbox = move_to_trash(account, msg)
             log_action(
                 session, message_id=msg.id, action_type="move_to_trash",
                 payload=payload, idempotency_key=key, status="success",

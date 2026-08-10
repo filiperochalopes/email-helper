@@ -226,10 +226,11 @@ documento, marketing ou fiscal.
 ### Fase 2 — web de limpeza em lote
 
 1. Criar endpoints paginados de candidatos e seleção, sem retornar corpo além do
-   snippet necessário.
+   snippet necessário. **Implementado.**
 2. Construir a lista com pré-seleção conservadora, filtros e barra de ação fixa.
+   **Implementado.**
 3. Implementar Lixeira em lote com uma confirmação, log/idempotência por item e
-   resultado parcial por conta.
+   resultado parcial por conta. **Implementado.**
 4. Adicionar Arquivar/Restaurar, Foco/Outros/Revisar e desfazer.
 5. Manter a TUI atual apenas para contas, regras e diagnóstico.
 

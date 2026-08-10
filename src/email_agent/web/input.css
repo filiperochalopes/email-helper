@@ -1,0 +1,42 @@
+@import "tailwindcss";
+@source "./index.html";
+@source "./static/app.js";
+
+@theme {
+  --color-ink-950: #17221e;
+  --color-ink-700: #40514a;
+  --color-mint-50: #f0f9f4;
+  --color-mint-100: #dff2e8;
+  --color-mint-500: #37a46f;
+  --color-mint-600: #27865a;
+  --color-mint-700: #206b49;
+  --shadow-panel: 0 20px 60px -36px rgb(23 34 30 / 0.28);
+}
+
+@layer base {
+  body {
+    background-image:
+      radial-gradient(circle at 8% -10%, rgb(55 164 111 / 0.12), transparent 32rem),
+      radial-gradient(circle at 96% 18%, rgb(250 204 21 / 0.08), transparent 26rem);
+  }
+
+  button,
+  input,
+  select {
+    outline-color: var(--color-mint-500);
+  }
+}
+
+@layer components {
+  .filter-control {
+    @apply h-11 rounded-xl border border-stone-200 bg-white px-3 text-sm text-ink-950 shadow-sm transition focus:border-mint-500 focus:ring-4 focus:ring-mint-100;
+  }
+
+  .message-card {
+    @apply relative rounded-2xl border border-stone-200/80 bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-mint-500/40 hover:shadow-panel;
+  }
+
+  .message-card[data-selected="true"] {
+    @apply border-mint-500/60 bg-mint-50/60 ring-1 ring-mint-500/20;
+  }
+}
