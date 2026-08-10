@@ -38,7 +38,7 @@ def stack_is_up(service: str = "app") -> bool:
     try:
         out = subprocess.run(
             ["docker", "compose", "ps", "--status", "running", "--services"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, check=False,
         )
     except (subprocess.SubprocessError, OSError):
         return False
@@ -63,7 +63,7 @@ def run_on_host(args: list[str], timeout: int = 300) -> RunResult:
 
 def _run(cmd: list[str], where: str, timeout: int) -> RunResult:
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
         return RunResult(False, where, exc.stdout or "", f"timeout após {timeout}s", 124)
     except OSError as exc:

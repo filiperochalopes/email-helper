@@ -12,15 +12,17 @@ _label_cache: dict[str, dict[str, str]] = {}  # email -> {label_name: label_id}
 def _label_map(service, account_email: str) -> dict[str, str]:
     if account_email not in _label_cache:
         resp = service.users().labels().list(userId="me").execute()
-        _label_cache[account_email] = {l["name"]: l["id"] for l in resp.get("labels", [])}
+        _label_cache[account_email] = {
+            label["name"]: label["id"] for label in resp.get("labels", [])
+        }
     return _label_cache[account_email]
 
 
 def resolve_label_names(service, account_email: str, label_ids: list[str]) -> list[str]:
     """Traduz IDs de label do Gmail (ex.: 'Label_42') para nomes legíveis
-    (ex.: 'AI/Importante'). Labels de sistema (INBOX, SPAM, ...) têm id==nome e
+    (ex.: 'AI/Foco'). Labels de sistema (INBOX, SPAM, ...) têm id==nome e
     passam direto. Usado pelo sync para que os eventos de mudança de label gravem
-    nomes — sem isso, a derivação de treino nunca casa as labels AI."""
+    nomes nos eventos locais e na interface."""
     id_to_name = {lid: name for name, lid in _label_map(service, account_email).items()}
     return [id_to_name.get(lid, lid) for lid in label_ids]
 
@@ -78,6 +80,15 @@ def remove_label(account: EmailAccount, provider_message_id: str, label_name: st
     service.users().messages().modify(
         userId="me", id=provider_message_id, body={"removeLabelIds": [labels[label_name]]}
     ).execute()
+
+
+def archive(account: EmailAccount, provider_message_id: str) -> None:
+    """Arquiva nativamente no Gmail removendo somente a label de sistema INBOX."""
+    service = get_service(account)
+    service.users().messages().modify(
+        userId="me", id=provider_message_id, body={"removeLabelIds": ["INBOX"]}
+    ).execute()
+    log.info("gmail_archived", account=account.email_address, msg=provider_message_id)
 
 
 def trash(account: EmailAccount, provider_message_id: str) -> None:

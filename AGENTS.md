@@ -1,16 +1,16 @@
 # email-agent — diretrizes para agentes
 
-Agente Python que monitora ~23 contas de e-mail (3 Gmail API + ~20 IMAP), classifica, organiza
-com labels `AI/*` e envia resumo matinal via WhatsApp (Evolution API **v2**). Plano completo e
-correções: [PLANO_REVISADO.md](PLANO_REVISADO.md). Operação: [README.md](README.md).
+Agente Python para várias contas Gmail/IMAP, com triagem pelo Ollama local,
+revisão conservadora de limpeza e resumo opcional via WhatsApp (Evolution API
+**v2**). Produto e roadmap: [docs/REVISAO_E_ROADMAP_FOCO.md](docs/REVISAO_E_ROADMAP_FOCO.md).
+Operação: [README.md](README.md).
 
 ## Arquitetura (resumo)
 
-- `src/email_agent/` — pacote único; entrypoints: API FastAPI (`api/app.py`), Celery
-  (`workers/celery_app.py`, beat embutido), CLI Typer (`cli/app.py`, comando `email-agent`).
-- Fluxo: sync (`sync/`) → persistência+dedup (`sync/persist.py`) → pipeline LangGraph
-  (`intelligence/graph.py`: regras → modelo sklearn → followup → LLM só se incerto → safety gate)
-  → labels via `actions/`.
+- `src/email_agent/` — pacote único; entrypoints: API FastAPI (`api/app.py`) e
+  CLI Typer (`cli/app.py`, comando `email-agent`). Não há broker nem workers.
+- Fluxo: sync (`sync/`) → persistência+dedup (`sync/persist.py`) → triagem pelo
+  Ollama local → regras por conta → safety gate → ações via `actions/`.
 - Models SQLAlchemy todos em `models/entities.py` (consolidado de propósito — facilita
   autogenerate do Alembic). Migrations em `migrations/`.
 - Contas declaradas em `secrets/accounts.yml` (ver `secrets/accounts.example.yml`);
@@ -26,15 +26,27 @@ correções: [PLANO_REVISADO.md](PLANO_REVISADO.md). Operação: [README.md](REA
    o comando CLI `delete`/`rm`, disparado pelo usuário, que mostra o corpo e confirma **um a um**,
    **move para a Lixeira** (recuperável, nunca expunge) via `actions/delete_actions.py` — com
    `idempotency_key` e log em `email_action_log`. `safety_gate.py` permanece sem caminho destrutivo.
-2. Dúvida/conflito → `AI/Revisar` + registro em `human_review`. Não decidir automaticamente.
+2. Dúvida/conflito → registro em `human_review`, sem criar label no provedor. Não decidir
+   automaticamente.
 3. Toda ação no provedor passa por `actions/safety_gate.py` com `idempotency_key` e log em
    `email_action_log`. Sem exceções nem atalhos.
-4. Decisão automática do próprio agente **não** vira evento de treino confiável
-   (`email_training_event.trusted=true` só para: feedback CLI, Label Studio, ações do usuário).
-5. Corpo de e-mail não sai da máquina: LLM é **Ollama local** (`host.docker.internal:11434`,
-   nativo no host; Docker no macOS não tem GPU). Não adicionar chamadas a LLMs externos.
-6. Falha em uma conta não pode interromper o processamento das demais (capturar, logar, seguir).
-7. Spam do provedor é **sinal**, não verdade.
+4. A inferência é sempre local pelo **Ollama** (`host.docker.internal:11434`; Docker no macOS
+   não tem GPU). Não adicionar chamadas a LLMs externos. Exceção de observabilidade: se o
+   usuário configurar explicitamente as chaves do Langfuse, prompts e respostas podem ser
+   enviados à instância externa indicada; sem as chaves, essa exportação permanece desligada.
+5. Falha em uma conta não pode interromper o processamento das demais (capturar, logar, seguir).
+6. Spam do provedor é **sinal**, não verdade.
+
+## Segredos — não inspecionar
+
+- `secrets/` é local, ignorado pelo Git e necessário para configurar as contas.
+- Agentes **não devem abrir, imprimir, pesquisar com `rg`/`grep`, resumir ou copiar**
+  `secrets/accounts.yml`, tokens OAuth, senhas, chaves ou qualquer arquivo dentro
+  de `secrets/`.
+- É permitido executar os conectores/comandos da aplicação que consomem esses
+  arquivos, desde que a saída solicitada não exponha credenciais nem conteúdo de
+  e-mails. Para diagnosticar contas, prefira IDs, status, nomes de pasta e flags
+  IMAP já filtrados pela aplicação.
 
 ## Convenções
 
@@ -42,9 +54,11 @@ correções: [PLANO_REVISADO.md](PLANO_REVISADO.md). Operação: [README.md](REA
 - Logging: `from email_agent.logging_setup import get_logger` (structlog JSON). Não usar `print`.
 - Strings de usuário/labels/docs em pt-BR; código e identificadores em inglês.
 - IDs internos: `E-YYYYMMDD-NNNNNN` (sequence global do Postgres, `ids.py`).
-- IMAP: `provider_message_id = "pasta:uidvalidity:uid"`; labels AI viram **cópia** para pasta
-  `AI.…` (IMAP não tem labels). Gmail: labels reais via API. Conexão IMAP: SSL implícito 993 por
-  padrão; `port`/`starttls`/`ssl` configuráveis por conta em `accounts.yml`.
+- IMAP: `provider_message_id = "pasta:uidvalidity:uid"`; labels AI que organizam mensagens
+  viram movimento para uma pasta `AI.…` (IMAP não tem labels), nunca cópia. O arquivamento
+  usa a pasta nativa anunciada por `\\Archive`; se não houver, usa/cria `Archive`. Gmail usa
+  labels reais e arquiva removendo `INBOX`. Conexão IMAP: SSL implícito 993 por padrão;
+  `port`/`starttls`/`ssl` são configuráveis por conta em `accounts.yml`.
 - Evolution API é **v2**: payload plano `{"number", "text"}`, header `apikey`. Não regredir para
   o formato v1 `textMessage`.
 - LLM: toda chamada ao Ollama passa por `intelligence/ollama_client.generate_json(prompt, task=...)`.
@@ -71,12 +85,9 @@ docker compose exec app email-agent digest          # gera resumo sem enviar
 Toda mudança em `models/entities.py` exige migration:
 `docker compose exec app alembic revision --autogenerate -m "..."` + revisar o arquivo gerado.
 
-Novos comportamentos de classificação devem ganhar teste em `tests/test_classifier.py`
-(seguir o padrão `_classify(**kwargs)`). Rodar a suíte inteira antes de concluir.
+Novos comportamentos de triagem devem ganhar teste em `tests/test_triage.py`.
+Rodar a suíte inteira antes de concluir.
 
 ## Infraestrutura compartilhada
 
-Serviços comuns aos agentes desta máquina vivem em `../infra` (Label Studio, Langfuse) na
-network Docker externa **`ai`** — este compose já se conecta a ela. Dentro dos containers,
-Label Studio = `http://label-studio:8080`, Langfuse = `http://langfuse-web:3000`.
-Ver `../infra/README.md`.
+Langfuse é opt-in e pode apontar para a instância externa configurada no `.env`.

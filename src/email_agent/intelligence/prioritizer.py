@@ -8,7 +8,7 @@ Quando o digest tem mais P0 do que cabe na mensagem, uma 2ª passada usa o model
 
 É consultivo: se o LLM falhar, mantemos a ordem original (por importance_score).
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from email_agent.intelligence.ollama_client import generate_json
 from email_agent.logging_setup import get_logger
@@ -31,10 +31,10 @@ E-MAILS:
 
 
 def _meta(m: EmailMessage, c: EmailClassification) -> dict:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     age_days = None
     if m.date:
-        d = m.date if m.date.tzinfo else m.date.replace(tzinfo=timezone.utc)
+        d = m.date if m.date.tzinfo else m.date.replace(tzinfo=UTC)
         age_days = max((now - d).days, 0)
     return {
         "id": m.email_agent_id,

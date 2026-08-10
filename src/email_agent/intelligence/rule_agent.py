@@ -3,7 +3,8 @@
 As regras são cadastradas em secrets/rules.yml (descrição em pt-BR + resultado) e
 ficam em email_rule. Para cada e-mail, carregamos as regras da conta (+ globais) e
 fazemos UMA chamada ao LLM passando todas as regras numeradas. O LLM diz quais se
-aplicam e a prioridade resultante. O corpo nunca sai da máquina (Ollama local).
+aplicam e a prioridade resultante. A inferência roda no Ollama local; o Langfuse
+opt-in pode exportar o trace para a instância configurada.
 """
 from sqlalchemy import select
 from sqlalchemy.orm import Session

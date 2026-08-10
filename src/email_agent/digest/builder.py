@@ -4,26 +4,18 @@ Produz até 4 mensagens (curtas, com formatação WhatsApp e emojis):
   - main:    TL;DR acionável de TODAS as caixas — só P0; se não houver P0, lista P1.
   - news:    📰 compilado de notícias/novidades (newsletters de conteúdo).
   - promo:   🏷️ promoções.
-  - cleanup: 🧹 candidatos a exclusão (antigos e sem valor de arquivamento).
+  - cleanup: 🧹 candidatos conservadores sugeridos pela LLM para revisão humana.
 WhatsApp markdown: *negrito*, _itálico_, ~tachado~, `mono`.
 
 E-mails mais antigos que `digest_max_age_days` não entram no resumo.
 """
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import func, or_, select
 
-from email_agent.actions.idempotency import already_applied, log_action, make_idempotency_key
-from email_agent.actions.safety_gate import _apply_label
 from email_agent.config import get_settings
 from email_agent.intelligence.prioritizer import prioritize_p0
-from email_agent.intelligence.taxonomy import (
-    LABEL_AGUARDANDO,
-    LABEL_FISCAL,
-    LABEL_LIXO_SUGERIDO,
-    LABEL_REVISAR,
-)
 from email_agent.logging_setup import get_logger
 from email_agent.models import (
     DailyDigest,
@@ -47,7 +39,6 @@ PRIORITIZE_THRESHOLD = 5
 
 # Prefixo das dicas de investigação no rodapé das mensagens.
 DOCKER = "docker compose exec -it app email-agent"
-CLEANUP_CATEGORIES = ("marketing", "promocao", "noticia", "spam_suspeito")
 
 
 @dataclass
@@ -93,8 +84,8 @@ def _item(m: EmailMessage, c: EmailClassification, *, action: bool) -> str:
 
 
 def build_digest(for_date: date | None = None) -> Digest:
-    for_date = for_date or date.today()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
+    for_date = for_date or now.date()
     since = now - timedelta(hours=24)
     age_cutoff = now - timedelta(days=get_settings().digest_max_age_days)
 
@@ -114,7 +105,7 @@ def build_digest(for_date: date | None = None) -> Digest:
                 latest[m.id] = (m, c)
         rows = sorted(latest.values(), key=lambda mc: -(mc[1].importance_score or 0))
 
-        waiting = [(m, c) for m, c in rows if LABEL_AGUARDANDO in (m.ai_labels or [])][:MAX_WAITING]
+        waiting = [(m, c) for m, c in rows if c.category == "aguardando_resposta"][:MAX_WAITING]
         waiting_ids = {m.id for m, _ in waiting}
         p0 = [(m, c) for m, c in rows if c.priority == "P0" and m.id not in waiting_ids]
         p1 = [(m, c) for m, c in rows if c.priority == "P1" and m.id not in waiting_ids]
@@ -131,10 +122,10 @@ def build_digest(for_date: date | None = None) -> Digest:
 
         st = _Stats(
             total=len(rows),
-            fiscais=sum(1 for m, _ in rows if LABEL_FISCAL in (m.ai_labels or [])),
+            fiscais=sum(1 for _, c in rows if c.category == "documento_fiscal"),
             docs=sum(1 for _, c in rows if c.category in ("documento", "documento_fiscal")),
             spam=sum(1 for _, c in rows if c.category == "spam_suspeito"),
-            revisar=sum(1 for m, _ in rows if LABEL_REVISAR in (m.ai_labels or [])),
+            revisar=sum(1 for _, c in rows if c.category == "revisar"),
             contas=session.execute(
                 select(func.count()).select_from(EmailAccount).where(EmailAccount.is_active.is_(True))
             ).scalar(),
@@ -152,13 +143,11 @@ def build_digest(for_date: date | None = None) -> Digest:
 
 
 def _cleanup_candidates(session, *, age_cutoff: datetime) -> list[tuple]:
-    """E-mails antigos e de baixo valor (marketing/promo/notícia/spam) — candidatos
-    a exclusão. Aplica a label `AI/Lixo Sugerido` no provedor (idempotente); apagar
-    de fato continua só no comando `delete`, confirmado pelo usuário."""
+    """Sugestões conservadoras da LLM; não altera o provedor nem apaga nada."""
     rows = session.execute(
         select(EmailMessage, EmailClassification)
         .join(EmailClassification, EmailClassification.message_id == EmailMessage.id)
-        .where(EmailClassification.category.in_(CLEANUP_CATEGORIES))
+        .where(EmailClassification.cleanup_candidate.is_(True))
         .where(EmailMessage.date.is_not(None), EmailMessage.date < age_cutoff)
         .where(~EmailMessage.mailbox.ilike("%trash%"), ~EmailMessage.mailbox.ilike("%lixeira%"))
         .order_by(EmailMessage.date.asc())  # mais antigos primeiro
@@ -166,40 +155,12 @@ def _cleanup_candidates(session, *, age_cutoff: datetime) -> list[tuple]:
     ).all()
     seen: set[int] = set()
     out = []
-    accounts: dict[int, EmailAccount] = {}
     for m, c in rows:
         if m.id in seen:
             continue
         seen.add(m.id)
         out.append((m, c))
-        account = accounts.get(m.account_id) or session.get(EmailAccount, m.account_id)
-        accounts[m.account_id] = account
-        _suggest_cleanup_label(session, m, account)
     return out
-
-
-def _suggest_cleanup_label(session, m: EmailMessage, account: EmailAccount) -> None:
-    """Marca a mensagem com `AI/Lixo Sugerido` no provedor, idempotente e logado.
-    Falha em uma conta não interrompe o digest (rule #6)."""
-    if not account or LABEL_LIXO_SUGERIDO in (m.ai_labels or []):
-        return
-    payload = {"label": LABEL_LIXO_SUGERIDO}
-    key = make_idempotency_key(m.account_id, m.provider_message_id, "add_label", payload)
-    if already_applied(session, key):
-        return
-    try:
-        _apply_label(account, m, LABEL_LIXO_SUGERIDO)
-        m.ai_labels = sorted(set(m.ai_labels or []) | {LABEL_LIXO_SUGERIDO})
-        log_action(
-            session, message_id=m.id, action_type="add_label",
-            payload=payload, idempotency_key=key, status="success",
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.error("cleanup_label_failed", email=m.email_agent_id, error=str(exc))
-        log_action(
-            session, message_id=m.id, action_type="add_label",
-            payload=payload, idempotency_key=key, status="error", error=str(exc),
-        )
 
 
 def _ids(pairs) -> str:
@@ -274,10 +235,10 @@ def save_digest(body: str, sent_to: str, status: str) -> None:
     with db_session() as session:
         session.add(
             DailyDigest(
-                digest_date=date.today(),
+                digest_date=datetime.now(UTC).date(),
                 sent_to=sent_to,
                 body=body,
-                sent_at=datetime.now(timezone.utc) if status == "sent" else None,
+                sent_at=datetime.now(UTC) if status == "sent" else None,
                 status=status,
             )
         )

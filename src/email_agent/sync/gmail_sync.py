@@ -4,7 +4,7 @@ Incremental por users.history.list (startHistoryId). Importante: historyId
 expira (HTTP 404) — nesse caso cai para um sync de janela por busca.
 """
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from googleapiclient.errors import HttpError
 from sqlalchemy import select
@@ -62,7 +62,7 @@ def sync_account(account_id: int, bootstrap: bool = False) -> list[int]:
             session.add(cursor)
         if new_history_id:
             cursor.last_history_id = str(new_history_id)
-        cursor.last_sync_at = datetime.now(timezone.utc)
+        cursor.last_sync_at = datetime.now(UTC)
         cursor.sync_status = "ok"
         db_account = session.get(EmailAccount, account_id)
         if db_account and db_account.auth_status != "ok":
@@ -95,7 +95,7 @@ def _changed_ids_from_history(service, start_history_id: str) -> tuple[list[str]
 
 
 def _ids_from_search(service, days: int) -> tuple[list[str], str | None]:
-    after = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y/%m/%d")
+    after = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y/%m/%d")
     query = f"({MONITORED_QUERY}) after:{after}"
     ids: list[str] = []
     page_token = None
@@ -135,9 +135,9 @@ def _fetch_and_persist(service, account: EmailAccount, message_ids: list[str]) -
             ).scalar_one_or_none()
             if existing:
                 if set(existing.raw_labels or []) != set(labels):
-                    # Grava o delta com NOMES de label (AI/Importante, ...) em vez de
-                    # IDs do Gmail (Label_42), para a derivação de treino casar as
-                    # labels AI. O event_type usa labels de sistema (INBOX/SPAM/...),
+                    # Grava o delta com NOMES de label (AI/Foco, ...) em vez de
+                    # IDs do Gmail (Label_42), para logs/eventos legíveis. O
+                    # event_type usa labels de sistema (INBOX/SPAM/...),
                     # que já são nomes, então é calculado com os IDs originais.
                     session.add(
                         EmailUserEvent(

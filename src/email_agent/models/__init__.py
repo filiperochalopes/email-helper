@@ -7,7 +7,6 @@ from email_agent.models.entities import (
     EmailClassification,
     EmailMessage,
     EmailRule,
-    EmailTrainingEvent,
     EmailUserEvent,
     HumanReview,
     MailboxCursor,
@@ -15,9 +14,6 @@ from email_agent.models.entities import (
 
 __all__ = [
     "Base",
-    "db_session",
-    "get_engine",
-    "session_factory",
     "DailyDigest",
     "EmailAccount",
     "EmailActionLog",
@@ -25,8 +21,10 @@ __all__ = [
     "EmailClassification",
     "EmailMessage",
     "EmailRule",
-    "EmailTrainingEvent",
     "EmailUserEvent",
     "HumanReview",
     "MailboxCursor",
+    "db_session",
+    "get_engine",
+    "session_factory",
 ]

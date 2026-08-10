@@ -10,12 +10,12 @@ runner = CliRunner()
 
 
 def _fake_msg(**over):
-    base = dict(
-        email_agent_id="E-20260612-000001", account_id=1, from_name="Loja",
-        from_email="promo@spam.example.com", subject="Oferta", date="2026-06-12",
-        mailbox="INBOX", ai_labels=["AI/Marketing"], normalized_text="corpo do e-mail",
-        snippet="resumo",
-    )
+    base = {
+        "email_agent_id": "E-20260612-000001", "account_id": 1, "from_name": "Loja",
+        "from_email": "promo@spam.example.com", "subject": "Oferta", "date": "2026-06-12",
+        "mailbox": "INBOX", "ai_labels": ["AI/Foco"], "normalized_text": "corpo do e-mail",
+        "snippet": "resumo",
+    }
     base.update(over)
     return SimpleNamespace(**base)
 
@@ -40,7 +40,7 @@ def test_show_json_is_parseable(monkeypatch):
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     assert payload["from_email"] == "promo@spam.example.com"
     assert payload["priority"] == "P2"
-    assert payload["ai_labels"] == ["AI/Marketing"]
+    assert payload["ai_labels"] == ["AI/Foco"]
 
 
 def test_delete_yes_skips_confirmation(monkeypatch):

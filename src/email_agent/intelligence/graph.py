@@ -1,34 +1,14 @@
-"""Workflow LangGraph: classifica uma mensagem já persistida e aplica ações seguras."""
-from langgraph.graph import END, START, StateGraph
+"""Pipeline explícito de triagem: Ollama local → regras → safety gate → persistência.
 
+O nome do módulo é mantido apenas por ser o ponto de entrada do pipeline; não há
+mais LangGraph, modelos sklearn ou treinamento noturno.
+"""
 from email_agent.actions.safety_gate import plan_safe_actions
-from email_agent.config import get_settings
-from email_agent.intelligence.category_model import CategoryModel
-from email_agent.intelligence.classifier import classify
 from email_agent.intelligence.followup import detect_followup_waiting_response
 from email_agent.intelligence.rule_agent import evaluate_rules_llm, load_rules_for_account
-from email_agent.intelligence.spam_model import SpamModel
 from email_agent.intelligence.state import EmailAgentState
-from email_agent.intelligence.summarizer import llm_review
-from email_agent.intelligence.taxonomy import LABEL_AGUARDANDO
+from email_agent.intelligence.triage import triage_email
 from email_agent.models import EmailAccount, EmailClassification, EmailMessage, db_session
-
-_spam_model: SpamModel | None = None
-_category_model: CategoryModel | None = None
-
-
-def _get_spam_model() -> SpamModel:
-    global _spam_model
-    if _spam_model is None:
-        _spam_model = SpamModel()
-    return _spam_model
-
-
-def _get_category_model() -> CategoryModel:
-    global _category_model
-    if _category_model is None:
-        _category_model = CategoryModel()
-    return _category_model
 
 
 def load_email(state: EmailAgentState) -> EmailAgentState:
@@ -36,8 +16,10 @@ def load_email(state: EmailAgentState) -> EmailAgentState:
         msg = session.get(EmailMessage, state["db_message_id"])
         if msg is None:
             return {"errors": ["mensagem não encontrada no banco"]}
+        account = session.get(EmailAccount, msg.account_id)
         return {
             "account_id": msg.account_id,
+            "account_email": account.email_address if account else "",
             "email_agent_id": msg.email_agent_id,
             "provider_message_id": msg.provider_message_id,
             "provider_thread_id": msg.provider_thread_id,
@@ -50,43 +32,48 @@ def load_email(state: EmailAgentState) -> EmailAgentState:
             "current_provider_labels": msg.raw_labels or [],
             "current_ai_labels": msg.ai_labels or [],
             "attachments": [
-                {"filename": a.filename, "content_type": a.content_type} for a in msg.attachments
+                {"filename": a.filename, "content_type": a.content_type}
+                for a in msg.attachments
             ],
-            "has_list_unsubscribe": bool((msg.raw_labels or []) and False) or state.get(
-                "has_list_unsubscribe", False
-            ),
             "errors": [],
         }
 
 
 def classify_message(state: EmailAgentState) -> EmailAgentState:
-    in_spam = state.get("mailbox", "").upper() in ("SPAM", "JUNK") or "SPAM" in [
-        l.upper() for l in state.get("current_provider_labels", [])
+    provider_labels = [str(label).upper() for label in state.get("current_provider_labels", [])]
+    in_spam = state.get("mailbox", "").upper() in {"SPAM", "JUNK"} or "SPAM" in provider_labels
+    attachments = [
+        str(item.get("filename") or item.get("content_type") or "")
+        for item in state.get("attachments", [])
     ]
-    result = classify(
+    result = triage_email(
+        account_email=state.get("account_email", ""),
+        mailbox=state.get("mailbox", ""),
+        from_email=state.get("from_email", ""),
+        from_name=state.get("from_name", ""),
         subject=state.get("subject", ""),
-        normalized_text=state.get("normalized_text", ""),
-        from_email=state.get("from_email"),
-        from_name=state.get("from_name"),
-        has_list_unsubscribe=state.get("has_list_unsubscribe", False),
-        attachment_filenames=[a.get("filename") or "" for a in state.get("attachments", [])],
-        attachment_types=[a.get("content_type") or "" for a in state.get("attachments", [])],
+        body=state.get("normalized_text", ""),
+        attachments=attachments,
         in_provider_spam=in_spam,
-        spam_model=_get_spam_model(),
-        category_model=_get_category_model(),
-        category_confidence_threshold=get_settings().category_confidence_threshold,
+        is_sent_by_user=state.get("is_sent_by_user", False),
     )
     return {
         "spam_score": result.spam_score,
-        "spam_reason": "; ".join(result.reasons),
+        "spam_reason": result.reason,
         "importance_score": result.importance_score,
-        "importance_reason": "; ".join(result.reasons),
+        "importance_reason": result.reason,
         "priority": result.priority,  # type: ignore[typeddict-item]
         "category": result.category,
         "confidence": result.confidence,
-        "suggested_labels": result.suggested_labels,
+        "action_required": result.action_required,
+        "cleanup_candidate": result.cleanup_candidate,
+        "cleanup_reason": result.cleanup_reason,
+        "digest_summary": result.summary,
+        # A classificação é local. Só regras explícitas do usuário podem sugerir
+        # labels/pastas ao safety gate.
+        "suggested_labels": [],
         "needs_human_review": result.needs_human_review,
-        "human_review_reason": "; ".join(result.reasons) if result.needs_human_review else None,
+        "human_review_reason": result.reason if result.needs_human_review else None,
     }
 
 
@@ -96,92 +83,69 @@ def detect_followup(state: EmailAgentState) -> EmailAgentState:
     with db_session() as session:
         msg = session.get(EmailMessage, state["db_message_id"])
         waiting, reason = detect_followup_waiting_response(session, msg)
-    if waiting:
-        labels = list(state.get("suggested_labels", []))
-        if LABEL_AGUARDANDO not in labels:
-            labels.append(LABEL_AGUARDANDO)
-        return {
-            "is_followup_waiting_response": True,
-            "followup_reason": reason,
-            "category": "aguardando_resposta",
-            "priority": "P1",
-            "suggested_labels": labels,
-        }
-    return {"is_followup_waiting_response": False}
+    if not waiting:
+        return {"is_followup_waiting_response": False}
+    return {
+        "is_followup_waiting_response": True,
+        "followup_reason": reason,
+        "category": "aguardando_resposta",
+        "priority": "P1",
+        "action_required": True,
+        "cleanup_candidate": False,
+        "cleanup_reason": "",
+    }
 
 
 _PRIORITY_RANK = {"P0": 3, "P1": 2, "P2": 1, "ignore": 0}
 
 
 def apply_rules(state: EmailAgentState) -> EmailAgentState:
-    """Agente abstraído: avalia as regras (rules.yml) da conta via LLM e ajusta
-    prioridade/categoria/labels. Sempre via LLM (decisão do usuário)."""
+    """Avalia apenas regras explícitas do usuário, também pelo Ollama local."""
     with db_session() as session:
         account = session.get(EmailAccount, state["account_id"])
         rules = load_rules_for_account(session, account.email_address)
     if not rules:
         return {}
     outcomes = evaluate_rules_llm(
-        account.email_address, state.get("subject", ""), state.get("from_email", ""),
-        state.get("normalized_text", ""), rules,
+        account.email_address,
+        state.get("subject", ""),
+        state.get("from_email", ""),
+        state.get("normalized_text", ""),
+        rules,
     )
     if not outcomes:
         return {}
 
-    out: EmailAgentState = {}
     labels = list(state.get("suggested_labels", []))
     best_priority = state.get("priority", "P2")
     reasons = []
     new_category = None
-    for oc in outcomes:
-        if oc.get("priority") and _PRIORITY_RANK.get(oc["priority"], -1) > _PRIORITY_RANK.get(best_priority, -1):
-            best_priority = oc["priority"]
-        for lb in oc.get("labels", []):
-            if lb not in labels:
-                labels.append(lb)
-        if oc.get("category"):
-            new_category = oc["category"]
-        reasons.append(oc["reason"])
+    for outcome in outcomes:
+        priority = outcome.get("priority")
+        if priority and _PRIORITY_RANK.get(priority, -1) > _PRIORITY_RANK.get(best_priority, -1):
+            best_priority = priority
+        for label in outcome.get("labels", []):
+            if label not in labels:
+                labels.append(label)
+        if outcome.get("category"):
+            new_category = outcome["category"]
+        reasons.append(outcome["reason"])
 
-    out["priority"] = best_priority  # type: ignore[typeddict-item]
-    out["suggested_labels"] = labels
+    result: EmailAgentState = {
+        "priority": best_priority,  # type: ignore[typeddict-item]
+        "suggested_labels": labels,
+        "importance_reason": "; ".join(
+            filter(None, [state.get("importance_reason", ""), *reasons])
+        ),
+    }
     if new_category:
-        out["category"] = new_category
-    existing = state.get("importance_reason", "")
-    out["importance_reason"] = "; ".join(filter(None, [existing] + reasons))
-    return out
-
-
-def llm_node(state: EmailAgentState) -> EmailAgentState:
-    """Camada 3 (último degrau da cascata regras > ML > LLM): só roda quando nem a
-    regra determinística nem o ML alcançaram o cutoff de confiança, ou quando o
-    e-mail entra no resumo (gera summary legível)."""
-    uncertain = (
-        state.get("needs_human_review")
-        or state.get("confidence", 1.0) < get_settings().llm_min_confidence
-    )
-    in_digest = state.get("priority") in ("P0", "P1")
-    if not (uncertain or in_digest):
-        return {}
-    review = llm_review(
-        state.get("subject", ""), state.get("from_email", ""), state.get("normalized_text", "")
-    )
-    if not review:
-        return {}
-    out: EmailAgentState = {"digest_summary": review.get("summary")}
-    if uncertain and review.get("spam_opinion") == "incerto":
-        out["needs_human_review"] = True
-    return out
-
-
-def safety_gate(state: EmailAgentState) -> EmailAgentState:
-    return plan_safe_actions(state)
+        result["category"] = new_category
+    return result
 
 
 def persist_result(state: EmailAgentState) -> EmailAgentState:
     with db_session() as session:
         msg = session.get(EmailMessage, state["db_message_id"])
-        # Uma classificação por mensagem: re-relabel substitui a anterior.
         session.query(EmailClassification).filter_by(message_id=msg.id).delete()
         session.add(
             EmailClassification(
@@ -192,10 +156,12 @@ def persist_result(state: EmailAgentState) -> EmailAgentState:
                 importance_reason=state.get("importance_reason"),
                 priority=state.get("priority"),
                 category=state.get("category"),
-                action_required=state.get("priority") in ("P0", "P1"),
+                action_required=state.get("action_required", False),
+                cleanup_candidate=state.get("cleanup_candidate", False),
+                cleanup_reason=state.get("cleanup_reason"),
                 digest_summary=state.get("digest_summary"),
                 suggested_labels=state.get("suggested_labels"),
-                model_name="rules+sgd+ollama",
+                model_name="ollama",
                 confidence=state.get("confidence"),
             )
         )
@@ -208,27 +174,12 @@ def persist_result(state: EmailAgentState) -> EmailAgentState:
     }
 
 
-def build_graph():
-    g = StateGraph(EmailAgentState)
-    g.add_node("load_email", load_email)
-    g.add_node("classify_message", classify_message)
-    g.add_node("detect_followup", detect_followup)
-    g.add_node("apply_rules", apply_rules)
-    g.add_node("llm_node", llm_node)
-    g.add_node("safety_gate", safety_gate)
-    g.add_node("persist_result", persist_result)
-
-    g.add_edge(START, "load_email")
-    g.add_edge("load_email", "classify_message")
-    g.add_edge("classify_message", "detect_followup")
-    g.add_edge("detect_followup", "apply_rules")
-    g.add_edge("apply_rules", "llm_node")
-    g.add_edge("llm_node", "safety_gate")
-    g.add_edge("safety_gate", "persist_result")
-    g.add_edge("persist_result", END)
-    return g.compile()
-
-
 def run_pipeline(db_message_id: int) -> EmailAgentState:
-    graph = build_graph()
-    return graph.invoke({"db_message_id": db_message_id})
+    state: EmailAgentState = {"db_message_id": db_message_id}
+    for step in (load_email, classify_message, detect_followup, apply_rules):
+        state.update(step(state))
+        if state.get("errors"):
+            return state
+    state.update(plan_safe_actions(state))
+    state.update(persist_result(state))
+    return state

@@ -19,8 +19,6 @@ htmlcov/
 .coverage
 
 # Dados gerados
-data/models/*.joblib
-data/exports/*.json
 *.log
 
 # macOS / IDE

@@ -5,7 +5,7 @@ from email_agent.tui import runner
 
 
 def _fake_run(stdout="", returncode=0):
-    def _run(cmd, capture_output, text, timeout):
+    def _run(cmd, capture_output, text, timeout, check=False):
         _run.cmd = cmd
         return SimpleNamespace(stdout=stdout, stderr="", returncode=returncode)
     return _run

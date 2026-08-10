@@ -11,7 +11,8 @@ import json
 from rich.console import Console
 from rich.table import Table
 
-from email_agent.tui import runner, yaml_store as ys
+from email_agent.tui import runner
+from email_agent.tui import yaml_store as ys
 from email_agent.tui.widgets import ask, banner, confirm, info_panel, select_menu, show_panel
 
 console = Console()
@@ -23,7 +24,7 @@ def main() -> None:
             console,
             "MENU PRINCIPAL",
             ["Contas de e-mail", "Regras de importância", "Abrir e-mail por ID",
-             "Arquivar antigos (AI/Archive)", "Status de autenticação (banco)", "Sair"],
+             "Arquivar antigos (Archive)", "Status de autenticação (banco)", "Sair"],
             footer="↑/↓ mover · Enter selecionar · Esc/q sair",
         )
         if choice in (None, 5):
@@ -64,7 +65,8 @@ def accounts_screen() -> None:
         title = "CONTAS  ·  " + (f"{len(gmail)} Gmail / {len(imap)} IMAP" if (gmail or imap) else "nenhuma declarada")
         if listing:
             info = "\n".join(listing)
-            console.clear(); banner(console)
+            console.clear()
+            banner(console)
             console.print(info)
             console.input("\n[bright_white on blue] Enter para abrir o menu [/]")
         choice = select_menu(console, title, options)
@@ -174,7 +176,8 @@ def _reauth_gmail(gmail) -> None:
     if sel is None or sel == len(emails):
         return
     email = emails[sel]
-    console.clear(); banner(console)
+    console.clear()
+    banner(console)
     console.print(f"Abrindo fluxo OAuth para [bold]{email}[/bold] no navegador…\n")
     auth = runner.run_on_host(["gmail", "auth", email])
     if not auth.ok:
@@ -197,7 +200,8 @@ def _reauth_gmail(gmail) -> None:
 
 def _save_and_import_accounts(data) -> None:
     ys.save_accounts(data)
-    console.clear(); banner(console)
+    console.clear()
+    banner(console)
     console.print("Importando contas para o banco…\n")
     res = runner.run_in_stack(["accounts", "import-yaml"])
     info_panel(console, f"import-yaml ({res.where})" if res.ok else "FALHA import-yaml",
@@ -206,7 +210,8 @@ def _save_and_import_accounts(data) -> None:
 
 def _show_auth_status() -> None:
     while True:
-        console.clear(); banner(console)
+        console.clear()
+        banner(console)
         console.print("Consultando status no banco…\n")
         res = runner.run_in_stack(["accounts", "list"])
         key = show_panel(
@@ -218,7 +223,8 @@ def _show_auth_status() -> None:
         )
         if key not in ("r", "R"):
             return
-        console.clear(); banner(console)
+        console.clear()
+        banner(console)
         console.print("Sincronizando todas as contas (valida autenticação)…")
         console.print("[dim]Pode levar alguns minutos com muitas contas IMAP. Aguarde…[/dim]\n")
         syn = runner.run_in_stack(["sync", "all"], timeout=900)
@@ -247,7 +253,8 @@ def _fetch_email(eid: str) -> dict | None:
 
 
 def _render_email(data: dict) -> None:
-    console.clear(); banner(console)
+    console.clear()
+    banner(console)
     t = Table(show_header=False, box=None, expand=True, style="bright_white on blue")
     t.add_column(style="bold bright_yellow on blue", no_wrap=True)
     t.add_column(style="bright_white on blue")
@@ -283,7 +290,7 @@ def email_screen() -> None:
         choice = select_menu(
             console,
             f"AÇÕES · {eid}",
-            ["Excluir (mover para a Lixeira)", "Arquivar (AI/Archive)",
+            ["Excluir (mover para a Lixeira)", "Arquivar (Archive)",
              "Categorizar (aplicar label AI)",
              "Criar regra com o domínio do remetente", "Recarregar", "Voltar"],
         )
@@ -311,7 +318,7 @@ def _email_delete(eid: str) -> None:
 
 
 def _email_archive(eid: str) -> None:
-    if not confirm(console, f"Mover {eid} para AI/Archive? (sai da INBOX, recuperável)"):
+    if not confirm(console, f"Mover {eid} para o Archive do provedor? (recuperável)"):
         return
     res = runner.run_in_stack(["archive-one", eid])
     info_panel(console, "Arquivado" if res.ok else "FALHA",
@@ -324,7 +331,7 @@ def archive_screen() -> None:
     if not before:
         return
     before = before.strip()
-    if not confirm(console, f"Arquivar tudo na INBOX antes de {before} em AI/Archive?"):
+    if not confirm(console, f"Arquivar tudo na INBOX antes de {before} no Archive nativo?"):
         return
     res = runner.run_in_stack(["archive", "--before", before, "--yes"], timeout=900)
     info_panel(console, "Arquivamento" if res.ok else "FALHA",
@@ -350,7 +357,8 @@ def _email_rule_from_domain(data: dict) -> None:
         info_panel(console, "AVISO", "Remetente sem domínio identificável.", ok=False)
         return
     prefilled = ys.spam_domain_rule(domain)
-    console.clear(); banner(console)
+    console.clear()
+    banner(console)
     console.print(f"Pré-preenchido para o domínio [bold]{domain}[/bold]. "
                   "Ajuste como quiser (Enter mantém o sugerido).\n")
     entry = _rule_form(prefilled)
@@ -386,7 +394,8 @@ def rules_screen() -> None:
             "Voltar",
         ]
         if listing:
-            console.clear(); banner(console)
+            console.clear()
+            banner(console)
             console.print("\n".join(listing))
             console.input("\n[bright_white on blue] Enter para abrir o menu [/]")
         choice = select_menu(console, f"REGRAS · {len(rules)} declarada(s)", options)
@@ -488,7 +497,8 @@ def _remove_rule(data, rules) -> None:
 
 def _save_and_import_rules(data) -> None:
     ys.save_rules(data)
-    console.clear(); banner(console)
+    console.clear()
+    banner(console)
     console.print("Importando regras para o banco…\n")
     res = runner.run_in_stack(["rules", "import-yaml"])
     info_panel(console, f"import-yaml ({res.where})" if res.ok else "FALHA import-yaml",

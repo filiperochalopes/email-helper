@@ -10,7 +10,7 @@ rules:
     outcome:
       priority: P0             # P0|P1|P2|ignore (opcional)
       category: documento_fiscal   # categoria interna (opcional)
-      labels: [AI/Importante]  # labels AI a sugerir (opcional)
+      labels: [AI/Foco]  # labels AI a sugerir (opcional)
 """
 import os
 

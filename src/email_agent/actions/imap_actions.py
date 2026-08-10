@@ -1,7 +1,14 @@
-"""Ações IMAP. Como IMAP não tem labels, "aplicar label AI" MOVE a mensagem para a
-pasta AI correspondente (sai da INBOX — não há duplicação). Importante/Aguardando
-ficam na INBOX, então não geram cópia em pasta (a label vive só no banco/digest)."""
-from email_agent.connectors.imap_client import connect, discover_folders, ensure_ai_folders
+"""Ações IMAP para labels, Arquivo nativo e Lixeira recuperável.
+
+Como IMAP não tem labels, ``AI/Spam Suspeito`` move a mensagem para uma pasta;
+``AI/Foco`` permanece na Inbox como keyword quando o servidor permitir.
+"""
+from email_agent.connectors.imap_client import (
+    connect,
+    discover_folders,
+    ensure_ai_folders,
+    ensure_archive_folder,
+)
 from email_agent.intelligence.taxonomy import ALL_AI_LABELS, imap_keyword
 from email_agent.logging_setup import get_logger
 from email_agent.models import EmailAccount, EmailMessage
@@ -11,7 +18,7 @@ log = get_logger(__name__)
 
 def add_keyword(account: EmailAccount, msg: EmailMessage, label: str) -> bool:
     """Aplica a label como KEYWORD IMAP (etiqueta no lugar, não move). Usado para as
-    labels que ficam na INBOX (Importante/Aguardando). Best-effort: se o servidor não
+    labels que ficam na INBOX (`AI/Foco`). Best-effort: se o servidor não
     permitir keywords personalizadas (sem `\\*` em PERMANENTFLAGS), não faz nada e
     retorna False — o chamador registra como 'skipped'."""
     keyword = imap_keyword(label)
@@ -44,7 +51,7 @@ def _move_uid(client, source_folder: str, uid: int, dest_folder: str) -> None:
 def move_to_ai_folder(account: EmailAccount, msg: EmailMessage, label: str) -> str:
     """Move a mensagem da pasta atual para a pasta AI da label. Retorna a pasta destino.
 
-    Diferente do antigo copy_to_ai_folder: o original SAI da INBOX (sem duplicar)."""
+    O original sai da INBOX, sem duplicação."""
     with connect(account) as client:
         mapping = ensure_ai_folders(client, ALL_AI_LABELS)
         dest = mapping[label]
@@ -52,18 +59,6 @@ def move_to_ai_folder(account: EmailAccount, msg: EmailMessage, label: str) -> s
         _move_uid(client, msg.mailbox, uid, dest)
         log.info("imap_moved_to_ai_folder", account=account.email_address, folder=dest, uid=uid)
     return dest
-
-
-def copy_to_ai_folder(account: EmailAccount, msg: EmailMessage, label: str) -> None:
-    """Cópia (não move) para a pasta AI. Mantido para labels que ficam na INBOX, caso
-    se queira espelhar; o pipeline padrão usa move_to_ai_folder."""
-    with connect(account) as client:
-        mapping = ensure_ai_folders(client, ALL_AI_LABELS)
-        folder = mapping[label]
-        client.select_folder(msg.mailbox, readonly=False)
-        uid = int(msg.provider_message_id.split(":")[-1])
-        client.copy([uid], folder)
-        log.info("imap_copied_to_ai_folder", account=account.email_address, folder=folder, uid=uid)
 
 
 def move_to_trash(account: EmailAccount, msg: EmailMessage) -> None:
@@ -78,3 +73,17 @@ def move_to_trash(account: EmailAccount, msg: EmailMessage) -> None:
         uid = int(msg.provider_message_id.split(":")[-1])
         _move_uid(client, msg.mailbox, uid, trash)
         log.info("imap_trashed", account=account.email_address, folder=trash, uid=uid)
+
+
+def move_to_archive(account: EmailAccount, msg: EmailMessage) -> str:
+    """Move para a pasta Archive anunciada pelo servidor/Canary.
+
+    Se nenhuma pasta tiver SPECIAL-USE ``\\Archive`` nem nome reconhecido, cria
+    ``Archive`` uma única vez. Retorna o nome real usado pelo servidor.
+    """
+    with connect(account) as client:
+        archive = ensure_archive_folder(client)
+        uid = int(msg.provider_message_id.split(":")[-1])
+        _move_uid(client, msg.mailbox, uid, archive)
+        log.info("imap_archived", account=account.email_address, folder=archive, uid=uid)
+        return archive

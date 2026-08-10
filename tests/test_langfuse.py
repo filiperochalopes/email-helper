@@ -4,10 +4,12 @@ from email_agent.intelligence import ollama_client
 
 
 def _settings(**over):
-    base = dict(
-        langfuse_enabled=False, langfuse_base_url="", llm_enabled=False,
-        langfuse_public_key="", langfuse_secret_key="",
-    )
+    base = {
+        "langfuse_enabled": False, "langfuse_base_url": "", "llm_enabled": False,
+        "langfuse_public_key": "", "langfuse_secret_key": "",
+        "ollama_base_url": "http://ollama.test:11434",
+        "model_for": lambda task: "modelo-local",
+    }
     base.update(over)
     return SimpleNamespace(**base)
 
@@ -30,6 +32,33 @@ def test_generate_json_none_when_llm_disabled(monkeypatch):
         lambda: _settings(llm_enabled=False),
     )
     assert ollama_client.generate_json("oi") is None
+
+
+def test_generate_json_uses_ollama_http_api(monkeypatch):
+    monkeypatch.setattr(
+        ollama_client,
+        "get_settings",
+        lambda: _settings(llm_enabled=True),
+    )
+    monkeypatch.setattr(ollama_client, "_langfuse_client", lambda: None)
+    calls = []
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"response": '{"category": "revisar"}', "prompt_eval_count": 4}
+
+    def _post(url, **kwargs):
+        calls.append((url, kwargs))
+        return _Response()
+
+    monkeypatch.setattr(ollama_client.httpx, "post", _post)
+    assert ollama_client.generate_json("mensagem") == {"category": "revisar"}
+    assert calls[0][0] == "http://ollama.test:11434/api/generate"
+    assert calls[0][1]["json"]["stream"] is False
+    assert calls[0][1]["json"]["format"] == "json"
 
 
 def test_langfuse_client_registers_flush_atexit(monkeypatch):

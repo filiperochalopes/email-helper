@@ -13,7 +13,7 @@ from email_agent.models import EmailAccount, EmailMessage
 QUESTION_PATTERNS = re.compile(
     r"\?|consegue|poderia|pode (me|nos)|aguardo|fico no aguardo|me confirm|"
     r"at[ée] (sexta|segunda|ter[çc]a|quarta|quinta|amanh[ãa]|o dia)|prazo|retorno",
-    re.I,
+    re.IGNORECASE,
 )
 
 

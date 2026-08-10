@@ -4,7 +4,7 @@ import re
 from bs4 import BeautifulSoup
 
 _INVISIBLE_STYLE = re.compile(
-    r"display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0|opacity\s*:\s*0(?:[^.]|$)", re.I
+    r"display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\s*0|opacity\s*:\s*0(?:[^.]|$)", re.IGNORECASE
 )
 
 

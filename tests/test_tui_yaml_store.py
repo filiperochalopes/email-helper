@@ -54,10 +54,10 @@ def test_rule_validation_and_labels_split(tmp_path):
     data = ys.load_rules(tmp_path / "r.yml")
     ys.upsert_rule(data, {
         "name": "vip", "scope": "*", "description": "fornecedor X é P0",
-        "outcome": {"priority": "P0", "labels": "AI/Importante, AI/Fiscal"},
+        "outcome": {"priority": "P0", "labels": "AI/Foco, AI/Spam Suspeito"},
     })
     rule = data["rules"][0]
-    assert rule["outcome"]["labels"] == ["AI/Importante", "AI/Fiscal"]
+    assert rule["outcome"]["labels"] == ["AI/Foco", "AI/Spam Suspeito"]
 
 
 def test_rule_invalid_priority(tmp_path):

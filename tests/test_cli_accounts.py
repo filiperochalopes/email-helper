@@ -6,7 +6,6 @@ from typer.testing import CliRunner
 from email_agent.cli import app as cli
 from email_agent.connectors import gmail_client
 
-
 runner = CliRunner()
 
 
@@ -57,10 +56,10 @@ def test_sync_once_reports_provider_failure(monkeypatch):
     account = SimpleNamespace(id=10, provider="gmail_api")
     monkeypatch.setattr(cli, "db_session", _db_session_with(_Result(one=account)))
 
-    from email_agent.workers import tasks_sync
+    from email_agent.sync import service
 
     monkeypatch.setattr(
-        tasks_sync,
+        service,
         "sync_one_account",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("OAuth inválido")),
     )

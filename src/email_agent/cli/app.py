@@ -1,7 +1,6 @@
-"""CLI administrativa do email-agent (Typer + Rich).
+"""CLI administrativa do email-agent (Typer + Rich)."""
+from datetime import UTC
 
-Correção pontual:  email-agent feedback E-...  |  email-agent label E-...
-"""
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -14,7 +13,6 @@ from email_agent.models import (
     EmailAccount,
     EmailClassification,
     EmailMessage,
-    EmailTrainingEvent,
     EmailUserEvent,
     db_session,
 )
@@ -24,15 +22,11 @@ console = Console()
 
 sync_app = typer.Typer(help="Sincronização")
 relabel_app = typer.Typer(help="Relabel/bootstrap")
-review_app = typer.Typer(help="Revisão (Label Studio)")
-train_app = typer.Typer(help="Treinamento")
 accounts_app = typer.Typer(help="Contas")
 gmail_app = typer.Typer(help="Gmail OAuth")
 rules_app = typer.Typer(help="Regras de importância (LLM)")
 app.add_typer(sync_app, name="sync")
 app.add_typer(relabel_app, name="relabel")
-app.add_typer(review_app, name="review")
-app.add_typer(train_app, name="train")
 app.add_typer(accounts_app, name="accounts")
 app.add_typer(gmail_app, name="gmail")
 app.add_typer(rules_app, name="rules")
@@ -92,57 +86,6 @@ def _print_summary(msg: EmailMessage, cls: EmailClassification | None) -> None:
         t.add_row("Motivo", (cls.importance_reason or "")[:200])
     console.print(t)
     console.print()
-
-
-FEEDBACK_OPTIONS = [
-    ("spam_suspeito", "Spam suspeito — phishing, cobrança indevida, currículo não solicitado, anexo suspeito."),
-    ("ham", "Não é spam — falso positivo; mensagem legítima."),
-    ("marketing", "Marketing — loja, newsletter, promoção ou rastreio sem ação."),
-    ("noticia", "Notícia — newsletter/conteúdo que me interessa (nova série, artigo, novidade)."),
-    ("promocao", "Promoção — desconto, cupom, oferta."),
-    ("documento", "Documento — possui documento/anexo relevante."),
-    ("documento_fiscal", "Documento fiscal — nota fiscal, boleto, fatura, cobrança, DAS, INSS, recibo."),
-    ("aguardando_resposta", "Aguardando resposta — follow-up que preciso acompanhar."),
-    ("importante_p0", "Importante P0 — exige ação hoje ou risco alto se ignorado."),
-    ("importante_p1", "Importante P1 — importante, mas sem urgência imediata."),
-    ("ignorar", "Ignorar — não relevante ou já resolvido."),
-    ("revisar", "Revisar — deixar em fila de dúvida/curadoria."),
-]
-
-
-@app.command()
-def feedback(email_agent_id: str):
-    """Feedback explícito com menu interativo (treina a classificação)."""
-    msg, cls = _load_message(email_agent_id)
-    _print_summary(msg, cls)
-    for i, (_, desc) in enumerate(FEEDBACK_OPTIONS, start=1):
-        console.print(f"{i:>2}. {desc}")
-    choice = typer.prompt("\nEscolha uma opção", type=int)
-    if not 1 <= choice <= len(FEEDBACK_OPTIONS):
-        console.print("[red]Opção inválida.[/red]")
-        raise typer.Exit(1)
-    label, desc = FEEDBACK_OPTIONS[choice - 1]
-
-    with db_session() as session:
-        session.add(
-            EmailTrainingEvent(
-                message_id=msg.id,
-                label=label,
-                source="explicit_cli_feedback",
-                weight=1.0,
-                trusted=True,
-                reason=desc,
-            )
-        )
-    console.print(f"[green]Feedback registrado:[/green] {label}")
-
-    from email_agent.intelligence.taxonomy import CATEGORY_TO_LABELS
-
-    labels = CATEGORY_TO_LABELS.get(label, [])
-    if labels and typer.confirm("Aplicar label/pasta correspondente agora?", default=False):
-        for lb in labels:
-            _apply_label_to_provider(msg, lb)
-        console.print(f"[green]Labels aplicadas:[/green] {', '.join(labels)}")
 
 
 @app.command()
@@ -352,14 +295,16 @@ def archive(
     account: str = typer.Option(None, "--account", help="Restringe a uma conta (e-mail). Padrão: todas."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Não confirma 1 a 1 (uso do TUI/batch)."),
 ):
-    """Move para AI/Archive e-mails antigos da INBOX (anteriores ao cutoff), exceto
-    marketing/notícia e spam. Recuperável e registrado em email_action_log."""
-    from datetime import datetime, timezone
+    """Move e-mails antigos da INBOX para o Archive nativo do provedor.
+
+    A ação é explícita, recuperável e registrada em email_action_log.
+    """
+    from datetime import datetime
 
     from email_agent.actions.archive_actions import archive_message, find_manual_archive_candidates
 
     try:
-        cutoff = datetime.strptime(before, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        cutoff = datetime.strptime(before, "%Y-%m-%d").replace(tzinfo=UTC)
     except ValueError:
         console.print("[red]Data inválida.[/red] Use o formato YYYY-MM-DD.")
         raise typer.Exit(1)
@@ -369,7 +314,7 @@ def archive(
         console.print("[yellow]Nenhum e-mail elegível para arquivar com esse cutoff.[/yellow]")
         return
     console.print(f"[cyan]{len(ids)} e-mail(s)[/cyan] na INBOX anteriores a {before}.")
-    if not yes and not typer.confirm("Arquivar todos em AI/Archive?", default=False):
+    if not yes and not typer.confirm("Arquivar todos na pasta Archive do provedor?", default=False):
         console.print("[yellow]Cancelado.[/yellow]")
         return
     archived = already = failed = 0
@@ -392,7 +337,7 @@ def archive(
 def archive_one(
     email_agent_ids: list[str] = typer.Argument(..., help="Um ou mais IDs (E-YYYYMMDD-NNNNNN)."),
 ):
-    """Move e-mail(s) específico(s) para AI/Archive (sai da INBOX, recuperável)."""
+    """Move e-mail(s) para o Archive nativo (sai da INBOX, recuperável)."""
     from email_agent.actions.archive_actions import archive_message
 
     for eid in email_agent_ids:
@@ -423,33 +368,22 @@ def digest(send: bool = typer.Option(False, "--send", help="Enviar via WhatsApp"
         console.print(f"[green]{len(digest_obj.messages())} mensagem(ns) enviada(s) via WhatsApp.[/green]")
 
 
-@app.command("run-morning")
-def run_morning(
+@app.command()
+def run(
     send: bool = typer.Option(False, "--send", help="Também enviar o digest via WhatsApp"),
     bootstrap: bool = typer.Option(False, "--bootstrap", help="Janela completa na 1ª carga"),
 ):
     """Smoke test: roda o fluxo matinal inteiro de forma síncrona —
     sync de todas as contas → classifica pendentes → gera (e opcionalmente envia) o digest."""
     from email_agent.digest.builder import build_digest
-    from email_agent.intelligence.graph import run_pipeline
-    from email_agent.models import EmailClassification, EmailMessage
-    from email_agent.workers.tasks_sync import sync_all_accounts
+    from email_agent.sync.service import classify_pending, sync_all_accounts
 
     console.print("[bold]1/3[/bold] Sincronizando contas…")
     sync_res = sync_all_accounts(bootstrap=bootstrap)
     console.print(sync_res)
 
-    console.print("[bold]2/3[/bold] Classificando pendentes (síncrono)…")
-    with db_session() as session:
-        classified = select(EmailClassification.message_id)
-        pending = (
-            session.execute(select(EmailMessage.id).where(EmailMessage.id.not_in(classified)))
-            .scalars()
-            .all()
-        )
-    for db_id in pending:
-        run_pipeline(db_id)
-    console.print(f"  {len(pending)} mensagens classificadas")
+    console.print("[bold]2/3[/bold] Classificando pendentes…")
+    console.print(classify_pending())
 
     console.print("[bold]3/3[/bold] Gerando digest…")
     digest_obj = build_digest()
@@ -469,7 +403,7 @@ def run_morning(
 
 @sync_app.command("all")
 def sync_all(bootstrap: bool = typer.Option(False, "--bootstrap")):
-    from email_agent.workers.tasks_sync import sync_all_accounts
+    from email_agent.sync.service import sync_all_accounts
 
     result = sync_all_accounts(bootstrap=bootstrap)
     console.print(result)
@@ -495,48 +429,20 @@ def sync_once(account: str = typer.Option(..., "--account")):
                     console.print(f"  {a.email_address}")
             raise typer.Exit(1)
         account_id, provider = acc.id, acc.provider
-    from email_agent.workers.tasks_sync import sync_one_account
+    from email_agent.sync.service import sync_one_account
 
     try:
         console.print(sync_one_account(account_id, provider, bootstrap=False))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         console.print(f"[red]Falha ao sincronizar {account}:[/red] {exc}")
         raise typer.Exit(1) from exc
 
 
 @relabel_app.command("all")
 def relabel_all():
-    from email_agent.workers.tasks_classify import classify_pending
+    from email_agent.sync.service import classify_pending
 
     console.print(classify_pending())
-
-
-@relabel_app.command("reapply")
-def relabel_reapply(
-    sync: bool = typer.Option(False, "--sync", help="Roda já, sem fila (bom para ver o resultado)."),
-):
-    """Migração: reaplica a organização nos e-mails que JÁ têm label AI e ainda estão na
-    INBOX — labels de "sair" movem p/ pasta (ou removem INBOX no Gmail); as que ficam
-    (Importante/Aguardando) ganham keyword IMAP. Não reclassifica (não usa LLM)."""
-    from email_agent.workers.tasks_classify import reapply_organization, reapply_pending
-
-    if not sync:
-        console.print(reapply_pending())
-        return
-    # modo síncrono: aplica em ordem, mostra progresso
-    with db_session() as session:
-        rows = session.execute(
-            select(EmailMessage.id, EmailMessage.ai_labels).where(EmailMessage.mailbox == "INBOX")
-        ).all()
-    targets = [mid for mid, ai in rows if ai]
-    console.print(f"[cyan]{len(targets)} e-mail(s)[/cyan] na INBOX com label AI — reaplicando…")
-    done = 0
-    for mid in targets:
-        reapply_organization(mid)
-        done += 1
-        if done % 50 == 0:
-            console.print(f"  {done}/{len(targets)}")
-    console.print(f"[green]Reaplicado em {done} e-mail(s).[/green]")
 
 
 @relabel_app.command("message")
@@ -595,143 +501,6 @@ def rules_test(email_agent_id: str):
     outcomes = evaluate_rules_llm(account.email_address, msg.subject or "", msg.from_email or "",
                                  msg.normalized_text or "", rules)
     console.print(outcomes or "[yellow]Nenhuma regra se aplicou.[/yellow]")
-
-
-# ---------- review / train ----------
-
-@review_app.command("export-labelstudio")
-def review_export(
-    label: str = typer.Option(None, "--label"),
-    uncertain: bool = typer.Option(False, "--uncertain"),
-    limit: int = typer.Option(500, "--limit"),
-    output: str = typer.Option("/data/exports/labelstudio_tasks.json", "--output",
-                               help="/data é o volume montado em ./data no host"),
-):
-    from email_agent.labelstudio.export import export_tasks
-
-    n = export_tasks(output, ai_label=label, uncertain=uncertain, limit=limit)
-    console.print(f"[green]{n} tasks exportadas para {output}[/green]")
-
-
-@review_app.command("push")
-def review_push(limit: int = typer.Option(200, "--limit")):
-    """Envia mensagens pendentes ao Label Studio via API (pré-anotadas)."""
-    from email_agent.labelstudio.sync import push_pending_tasks
-
-    n = push_pending_tasks(limit=limit)
-    console.print(f"[green]{n} tasks enviadas ao Label Studio.[/green]")
-
-
-@train_app.command("import-labelstudio")
-def train_import(file: str):
-    from email_agent.labelstudio.import_results import import_annotations
-
-    console.print(f"[green]{import_annotations(file)} eventos de treino criados.[/green]")
-
-
-@train_app.command("pull-labelstudio")
-def train_pull():
-    """Puxa anotações concluídas do Label Studio via API e cria eventos de treino."""
-    from email_agent.labelstudio.sync import pull_annotations
-
-    console.print(f"[green]{pull_annotations()} eventos de treino criados.[/green]")
-
-
-@train_app.command("fit")
-def train_fit():
-    from email_agent.intelligence.training import derive_training_from_user_events, fit_models
-
-    derived = derive_training_from_user_events()
-    fit = fit_models()
-    if fit["skipped"]:
-        console.print(f"Eventos implícitos derivados: {derived} | [yellow]ainda sem amostras suficientes para treinar[/yellow]")
-    else:
-        console.print(
-            f"Eventos implícitos derivados: {derived} | "
-            f"spam: {fit['spam_samples']} amostras | categoria: {fit['category_samples']} amostras"
-        )
-
-
-@train_app.command("stats")
-def train_stats():
-    """Mostra o que já temos para treinar: rótulos manuais x automáticos x feedback."""
-    from email_agent.intelligence.training import training_stats
-
-    s = training_stats()
-    te = s["training_events"]
-
-    resumo = Table(title="Eventos de treino")
-    resumo.add_column("métrica"); resumo.add_column("valor", justify="right")
-    resumo.add_row("rótulos manuais (Label Studio + feedback CLI)", str(te["manual_labels"]))
-    resumo.add_row("rótulos implícitos (suas ações na caixa)", str(te["implicit_labels"]))
-    resumo.add_row("pendentes p/ treinar", str(te["pending_fit"]))
-    resumo.add_row("já consumidos pelo modelo", str(te["already_consumed"]))
-    resumo.add_row("mínimo p/ treinar (TRAINING_MIN_EVENTS)", str(te["min_events_to_fit"]))
-    console.print(resumo)
-
-    def _kv_table(title: str, data: dict, c1: str = "chave") -> None:
-        t = Table(title=title)
-        t.add_column(c1); t.add_column("qtd", justify="right")
-        for k, v in sorted(data.items(), key=lambda kv: -kv[1]):
-            t.add_row(k, str(v))
-        console.print(t)
-
-    _kv_table("Por fonte", te["by_source"], "fonte")
-    _kv_table("Por rótulo", te["by_label"], "rótulo")
-
-    # Prontidão por classe: onde o ML já tem rótulo confiável suficiente para decidir.
-    readiness = Table(title=f"Prontidão por classe (mínimo {te['min_events_per_class']}/classe)")
-    readiness.add_column("categoria"); readiness.add_column("eventos", justify="right")
-    readiness.add_column("pronta?", justify="center")
-    for cat, info in sorted(s["class_readiness"].items(), key=lambda kv: -kv[1]["count"]):
-        mark = "[green]sim[/green]" if info["ready"] else "[yellow]falta[/yellow]"
-        readiness.add_row(cat, str(info["count"]), mark)
-    console.print(readiness)
-
-    _kv_table("Feedback por mudança de status (suas ações)", s["user_feedback_by_event"], "evento")
-    _kv_table("Classificações automáticas por categoria", s["auto_classifications"]["by_category"], "categoria")
-    _kv_table("Classificações automáticas por prioridade", s["auto_classifications"]["by_priority"], "prioridade")
-
-
-@train_app.command("eval")
-def train_eval(test_size: float = typer.Option(0.25, "--test-size")):
-    """Avalia (holdout) precision/recall/f1 por classe no dataset confiável atual.
-    Mede o quanto dá pra confiar no ML antes de subir o cutoff. Não treina os modelos
-    de produção — só cópias limpas para medir."""
-    from email_agent.intelligence.training import evaluate_models
-
-    res = evaluate_models(test_size=test_size)
-    if "error" in res:
-        console.print(f"[yellow]{res['error']}[/yellow]")
-        return
-    console.print(f"Amostras utilizáveis: {res['samples']}")
-
-    def _report(title: str, rep: dict) -> None:
-        if "error" in rep:
-            console.print(f"[yellow]{title}: {rep['error']}[/yellow]")
-            return
-        t = Table(title=f"{title} — acurácia {rep['accuracy']:.2f} "
-                  f"(treino {rep['train_size']} / teste {rep['test_size']})")
-        t.add_column("classe"); t.add_column("precision", justify="right")
-        t.add_column("recall", justify="right"); t.add_column("f1", justify="right")
-        t.add_column("suporte", justify="right")
-        for cls, m in rep["per_class"].items():
-            t.add_row(cls, f"{m['precision']:.2f}", f"{m['recall']:.2f}",
-                      f"{m['f1']:.2f}", str(m["support"]))
-        console.print(t)
-
-    _report("Spam (binário)", res["spam"])
-    _report("Categoria (multiclasse)", res["category"])
-
-    def _estado(m):
-        return "[green]treinado[/green]" if m["trained"] else "[yellow]ainda não treinado[/yellow]"
-
-    spam, cat = s["spam_model"], s["category_model"]
-    console.print(f"Modelo sklearn spam/ham: {_estado(spam)} — {spam['path']}")
-    console.print(
-        f"Modelo sklearn categoria (multiclasse): {_estado(cat)} — "
-        f"dispensa LLM com confiança ≥ {cat['confidence_threshold']:.2f}"
-    )
 
 
 # ---------- accounts / gmail ----------

@@ -3,7 +3,7 @@
 Mantidos num único módulo para facilitar autogenerate do Alembic; o pacote
 ``email_agent.models`` reexporta tudo.
 """
-from datetime import datetime, date
+from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
@@ -39,7 +39,7 @@ class EmailAccount(TimestampMixin, Base):
     display_name: Mapped[str | None] = mapped_column(String(200))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     priority_weight: Mapped[float] = mapped_column(Float, default=1.0)
-    # gmail_api: nome do arquivo de token; imap: chave no secrets/imap_accounts.json
+    # gmail_api: nome do arquivo de token; imap: referência lógica no YAML local
     credentials_ref: Mapped[str | None] = mapped_column(String(500))
     imap_host: Mapped[str | None] = mapped_column(String(255))
     imap_port: Mapped[int | None] = mapped_column(Integer, default=993)
@@ -120,6 +120,8 @@ class EmailClassification(Base):
     priority: Mapped[str | None] = mapped_column(String(10))  # P0|P1|P2|ignore
     category: Mapped[str | None] = mapped_column(String(40), index=True)
     action_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    cleanup_candidate: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    cleanup_reason: Mapped[str | None] = mapped_column(Text)
     deadline: Mapped[date | None] = mapped_column(Date)
     digest_summary: Mapped[str | None] = mapped_column(Text)
     suggested_labels: Mapped[list | None] = mapped_column(JSON)
@@ -170,20 +172,6 @@ class EmailUserEvent(Base):
     source: Mapped[str] = mapped_column(String(30), default="sync_diff")
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
-class EmailTrainingEvent(Base):
-    __tablename__ = "email_training_event"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    message_id: Mapped[int] = mapped_column(ForeignKey("email_message.id"), index=True)
-    label: Mapped[str] = mapped_column(String(40), index=True)
-    source: Mapped[str] = mapped_column(String(40))  # implicit_event|explicit_cli_feedback|label_studio
-    weight: Mapped[float] = mapped_column(Float, default=1.0)
-    trusted: Mapped[bool] = mapped_column(Boolean, default=False)
-    reason: Mapped[str | None] = mapped_column(Text)
-    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class HumanReview(Base):

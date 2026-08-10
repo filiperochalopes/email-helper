@@ -2,11 +2,9 @@
 
 Política do MVP:
 - nunca deletar, nunca esvaziar lixeira, nunca mover para Spam/Trash do provedor;
-- "aplicar label" agora MOVE o e-mail para fora da INBOX (Gmail: label + remove INBOX;
-  IMAP: move para a pasta AI), EXCETO Importante/Aguardando, que ficam na INBOX por
-  exigirem ação — assim o mesmo e-mail nunca aparece em dois lugares;
-- spam suspeito recebe a label AI/Spam Suspeito (e sai da INBOX);
-- incerteza/conflito vira AI/Revisar + human_review;
+- o único label que fica na Inbox é AI/Foco; AI/Spam Suspeito pode sair da Inbox;
+- AI/Spam Suspeito só é aplicado por regra explícita ou ação do usuário;
+- incerteza/conflito vira somente `human_review`, sem label no provedor;
 - toda ação tem idempotency_key e vai para email_action_log.
 """
 from typing import Any
@@ -15,7 +13,6 @@ from email_agent.actions.idempotency import already_applied, log_action, make_id
 from email_agent.intelligence.taxonomy import (
     ALL_AI_LABELS,
     INBOX_KEEP_LABELS,
-    LABEL_REVISAR,
     imap_destination,
     moves_out_of_inbox,
 )
@@ -28,18 +25,17 @@ DESTRUCTIVE_ACTIONS = {"delete", "expunge", "empty_trash", "move_to_trash", "mov
 
 
 def plan_safe_actions(state: dict[str, Any]) -> dict[str, Any]:
-    suggested = [l for l in state.get("suggested_labels", []) if l in ALL_AI_LABELS]
-    if state.get("errors"):
-        suggested = sorted(set(suggested) | {LABEL_REVISAR})
-
+    suggested = [
+        label for label in state.get("suggested_labels", []) if label in ALL_AI_LABELS
+    ]
     applied: list[dict[str, Any]] = []
     with db_session() as session:
         msg = session.get(EmailMessage, state["db_message_id"])
         account = session.get(EmailAccount, msg.account_id)
         current = set(msg.ai_labels or [])
-        to_add = [l for l in suggested if l not in current]
+        to_add = [label for label in suggested if label not in current]
 
-        # Fica na INBOX se QUALQUER label sugerida exigir ação (Importante/Aguardando).
+        # Fica na INBOX se qualquer label sugerida representar foco.
         stays = bool(set(suggested) & INBOX_KEEP_LABELS)
         applied += _apply_to_provider(session, account, msg, to_add, suggested, stays)
 
@@ -63,7 +59,7 @@ def _apply_to_provider(
     """Aplica labels e (se for o caso) move o e-mail para fora da INBOX.
     Gmail aceita múltiplas labels; IMAP escolhe UMA pasta destino por prioridade."""
     applied: list[dict[str, Any]] = []
-    move_out = (not stays) and any(moves_out_of_inbox(l) for l in suggested)
+    move_out = (not stays) and any(moves_out_of_inbox(label) for label in suggested)
 
     if account.provider == "gmail_api":
         from email_agent.actions.gmail_actions import add_label, remove_label
@@ -76,7 +72,7 @@ def _apply_to_provider(
         if move_out and _do(session, msg, "remove_from_inbox", {},
                             lambda: remove_label(account, msg.provider_message_id, "INBOX")):
             applied.append({"action": "remove_from_inbox"})
-            msg.raw_labels = [l for l in (msg.raw_labels or []) if l != "INBOX"]
+            msg.raw_labels = [label for label in (msg.raw_labels or []) if label != "INBOX"]
         return applied
 
     # IMAP: uma pasta só. Move para a de maior prioridade entre as labels que saem.
@@ -107,7 +103,7 @@ def _apply_imap_keywords(session, account: EmailAccount, msg: EmailMessage,
     from email_agent.actions.imap_actions import add_keyword
 
     applied: list[dict[str, Any]] = []
-    for label in [l for l in suggested if l in INBOX_KEEP_LABELS]:
+    for label in [candidate for candidate in suggested if candidate in INBOX_KEEP_LABELS]:
         payload = {"label": label}
         key = make_idempotency_key(msg.account_id, msg.provider_message_id, "add_keyword", payload)
         if already_applied(session, key):

@@ -1,5 +1,5 @@
 """Persistência de mensagens normalizadas + deduplicação + eventos de mudança."""
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -95,7 +95,7 @@ def persist_message(
         return moved, False
 
     msg = EmailMessage(
-        email_agent_id=generate_email_agent_id(session, datetime.now(timezone.utc)),
+        email_agent_id=generate_email_agent_id(session, datetime.now(UTC)),
         account_id=account_id,
         provider_message_id=provider_message_id,
         provider_thread_id=provider_thread_id,
@@ -107,7 +107,7 @@ def persist_message(
         cc_json=parsed.cc,
         subject=parsed.subject,
         date=parsed.date,
-        received_at=datetime.now(timezone.utc),
+        received_at=datetime.now(UTC),
         snippet=parsed.normalized_text[:300],
         normalized_text=parsed.normalized_text,
         normalized_text_hash=parsed.normalized_text_hash,

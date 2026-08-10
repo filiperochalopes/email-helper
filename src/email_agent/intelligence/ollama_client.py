@@ -1,13 +1,16 @@
 """Cliente Ollama local centralizado.
 
 Uma única função para todas as chamadas ao Ollama, com seleção de modelo por
-task (`base` x `reasoning`). O corpo do e-mail nunca sai da máquina: o Ollama
-roda nativo no host macOS (containers acessam via host.docker.internal).
+task (`base` x `reasoning`). A inferência roda no Ollama local. Quando Langfuse
+é habilitado explicitamente, prompts e respostas são exportados para a instância
+configurada; sem as chaves, nenhuma telemetria externa é iniciada.
 """
 import atexit
 import json
 import re
 from functools import lru_cache
+
+import httpx
 
 from email_agent.config import get_settings
 from email_agent.logging_setup import get_logger
@@ -33,7 +36,7 @@ def _langfuse_client():
             kwargs["host"] = settings.langfuse_base_url
         client = Langfuse(**kwargs)
         # O SDK v4 envia eventos em batch num thread de background; processos
-        # curtos (CLI, run-morning, tasks Celery one-shot) terminam antes do
+        # curtos (CLI e `email-agent run`) podem terminar antes do
         # batch sair. Sem este flush no encerramento os traces somem silenciosamente.
         atexit.register(client.flush)
         return client
@@ -62,21 +65,6 @@ def parse_json_response(text: str) -> dict:
     if not match:
         raise ValueError(f"resposta sem JSON: {text[:120]!r}")
     return json.loads(match.group(0))
-
-
-@lru_cache(maxsize=8)
-def _chat_model(model: str, temperature: float, timeout: float):
-    """ChatOllama (abstração LangChain) reutilizável por (modelo, temperatura)."""
-    from langchain_ollama import ChatOllama
-
-    settings = get_settings()
-    return ChatOllama(
-        model=model,
-        base_url=settings.ollama_base_url,
-        temperature=temperature,
-        format="json",
-        client_kwargs={"timeout": timeout},
-    )
 
 
 def generate_json(
@@ -112,23 +100,33 @@ def generate_json(
         except Exception as exc:  # noqa: BLE001
             log.debug("langfuse_generation_start_failed", error=str(exc))
     try:
-        chat = _chat_model(model, temperature, timeout)
-        response = chat.invoke(prompt)
-        content = response.content if isinstance(response.content, str) else str(response.content)
+        response = httpx.post(
+            f"{settings.ollama_base_url.rstrip('/')}/api/generate",
+            json={
+                "model": model,
+                "prompt": prompt,
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": temperature},
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        content = str(payload.get("response") or "")
         result = parse_json_response(content)
         if obs:
             try:
-                usage = getattr(response, "usage_metadata", None) or {}
                 obs.update(
                     output=result,
                     usage_details={
-                        "input": usage.get("input_tokens", 0),
-                        "output": usage.get("output_tokens", 0),
+                        "input": payload.get("prompt_eval_count", 0),
+                        "output": payload.get("eval_count", 0),
                     },
                 )
                 obs.end()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as trace_exc:  # noqa: BLE001
+                log.debug("langfuse_generation_end_failed", error=str(trace_exc))
         return result
     except Exception as exc:  # noqa: BLE001
         log.warning("ollama_generate_failed", task=task, model=model, error=str(exc))
@@ -136,6 +134,6 @@ def generate_json(
             try:
                 obs.update(level="ERROR", status_message=str(exc))
                 obs.end()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as trace_exc:  # noqa: BLE001
+                log.debug("langfuse_generation_error_failed", error=str(trace_exc))
         return None

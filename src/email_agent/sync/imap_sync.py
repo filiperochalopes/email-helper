@@ -1,5 +1,5 @@
 """Sync incremental IMAP por UID, respeitando UIDVALIDITY, com BODY.PEEK."""
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -85,7 +85,7 @@ def _sync_folder(client, account, role: str, folder: str, bootstrap: bool, setti
         uids = client.search(["UID", f"{last_uid + 1}:*"])
         uids = [u for u in uids if u > last_uid]
     else:
-        since = datetime.now(timezone.utc) - timedelta(days=settings.default_sync_since_days)
+        since = datetime.now(UTC) - timedelta(days=settings.default_sync_since_days)
         uids = client.search(["SINCE", since.date()])
 
     if not uids:
@@ -94,7 +94,7 @@ def _sync_folder(client, account, role: str, folder: str, bootstrap: bool, setti
             if cursor.last_uid is None:
                 uidnext = info.get(b"UIDNEXT")
                 cursor.last_uid = (uidnext - 1) if uidnext else 0
-            cursor.last_sync_at = datetime.now(timezone.utc)
+            cursor.last_sync_at = datetime.now(UTC)
             cursor.sync_status = "ok"
         return []
 
@@ -127,7 +127,7 @@ def _sync_folder(client, account, role: str, folder: str, bootstrap: bool, setti
     with db_session() as session:
         cursor = _get_cursor(session, account.id, folder)
         cursor.last_uid = max(uids)
-        cursor.last_sync_at = datetime.now(timezone.utc)
+        cursor.last_sync_at = datetime.now(UTC)
         cursor.sync_status = "ok"
 
     log.info("imap_folder_synced", account=account.email_address, folder=folder, new=len(new_ids))

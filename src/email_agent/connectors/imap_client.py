@@ -9,9 +9,10 @@ from imapclient import IMAPClient
 from email_agent.connectors.accounts_config import imap_credentials
 from email_agent.models import EmailAccount
 
-SPAM_FOLDER_RE = re.compile(r"spam|junk|lixo eletr", re.I)
-SENT_FOLDER_RE = re.compile(r"sent|enviad", re.I)
-TRASH_FOLDER_RE = re.compile(r"trash|deleted|lixeira", re.I)
+SPAM_FOLDER_RE = re.compile(r"spam|junk|lixo eletr", re.IGNORECASE)
+SENT_FOLDER_RE = re.compile(r"sent|enviad", re.IGNORECASE)
+TRASH_FOLDER_RE = re.compile(r"trash|deleted|lixeira", re.IGNORECASE)
+ARCHIVE_FOLDER_RE = re.compile(r"^archives?$|arquivad[oa]s?", re.IGNORECASE)
 
 
 def connect(account: EmailAccount) -> IMAPClient:
@@ -45,21 +46,49 @@ def discover_folders(client: IMAPClient) -> dict[str, object]:
     spam: list[str] = []
     sent: str | None = None
     trash: str | None = None
+    archive: str | None = None
     for flags, _delim, name in client.list_folders():
         if name == "AI" or name.startswith("AI."):
             continue
-        flat = " ".join(str(f) for f in flags)
+        flat = " ".join(f.decode(errors="replace") if isinstance(f, bytes) else str(f) for f in flags)
         if "\\Junk" in flat or SPAM_FOLDER_RE.search(name):
             spam.append(name)
         elif "\\Sent" in flat or (sent is None and SENT_FOLDER_RE.search(name)):
             sent = name
         elif "\\Trash" in flat or (trash is None and TRASH_FOLDER_RE.search(name)):
             trash = name
-    return {"inbox": "INBOX", "spam": spam, "sent": sent, "trash": trash}
+        elif "\\Archive" in flat or (archive is None and ARCHIVE_FOLDER_RE.search(name)):
+            archive = name
+    return {
+        "inbox": "INBOX",
+        "spam": spam,
+        "sent": sent,
+        "trash": trash,
+        "archive": archive,
+    }
+
+
+def ensure_archive_folder(client: IMAPClient, fallback: str = "Archive") -> str:
+    """Retorna o arquivo nativo do servidor/Canary ou cria um fallback único.
+
+    A flag SPECIAL-USE ``\\Archive`` tem prioridade sobre nomes. Isso reconhece,
+    por exemplo, ``Archives`` criado pelo provedor/Canary e evita uma duplicata.
+    """
+    discovered = discover_folders(client).get("archive")
+    if isinstance(discovered, str) and discovered:
+        return discovered
+    existing = {name for _flags, _delimiter, name in client.list_folders()}
+    folder = fallback
+    if folder not in existing:
+        client.create_folder(folder)
+    subscribed = {name for _flags, _delimiter, name in client.list_sub_folders()}
+    if folder not in subscribed:
+        client.subscribe_folder(folder)
+    return folder
 
 
 def ensure_ai_folders(client: IMAPClient, ai_labels: list[str], delimiter: str = ".") -> dict[str, str]:
-    """Cria pastas AI (AI/Importante -> AI.Importante conforme delimitador) e
+    """Cria pastas AI (AI/Spam Suspeito -> AI.Spam Suspeito conforme delimitador) e
     retorna o mapa label -> nome real da pasta."""
     try:
         _flags, delim, _name = client.list_folders()[0]
