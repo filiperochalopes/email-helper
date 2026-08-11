@@ -1,9 +1,9 @@
-"""Dispara comandos do email-agent a partir do TUI (host).
+"""Dispara comandos do email-helper a partir do TUI (host).
 
 Duas rotas:
 - `run_in_stack`: comandos que tocam o banco (import-yaml, accounts list). Preferem
-  `docker compose exec -T app email-agent ...` quando o stack está de pé (o DB resolve
-  como 'postgres' dentro da rede), caindo para execução local se o Docker não estiver up.
+  `docker compose exec -T email-helper-app agent ...` quando o stack está de pé,
+  caindo para execução local se o Docker não estiver up.
 - `run_on_host`: comandos que precisam do host (gmail auth abre o navegador).
 """
 from __future__ import annotations
@@ -24,15 +24,15 @@ class RunResult:
 
 
 def _local_argv() -> list[str]:
-    """email-agent local: usa o console-script se existir, senão o módulo do venv atual."""
-    exe = shutil.which("email-agent")
+    """CLI local: usa o console-script se existir, senão o módulo do venv atual."""
+    exe = shutil.which("agent")
     if exe:
         return [exe]
     return [sys.executable, "-m", "email_agent.cli.app"]
 
 
-def stack_is_up(service: str = "app") -> bool:
-    """True se o serviço Docker (default 'app') estiver rodando."""
+def stack_is_up(service: str = "email-helper-app") -> bool:
+    """True se o serviço Docker estiver rodando."""
     if not shutil.which("docker"):
         return False
     try:
@@ -45,10 +45,12 @@ def stack_is_up(service: str = "app") -> bool:
     return service in out.stdout.split()
 
 
-def run_in_stack(args: list[str], service: str = "app", timeout: int = 300) -> RunResult:
-    """Roda `email-agent <args>` no container (se up) ou local."""
+def run_in_stack(
+    args: list[str], service: str = "email-helper-app", timeout: int = 300
+) -> RunResult:
+    """Roda `agent <args>` no container (se up) ou local."""
     if stack_is_up(service):
-        cmd = ["docker", "compose", "exec", "-T", service, "email-agent", *args]
+        cmd = ["docker", "compose", "exec", "-T", service, "agent", *args]
         where = "docker"
     else:
         cmd = [*_local_argv(), *args]
@@ -57,7 +59,7 @@ def run_in_stack(args: list[str], service: str = "app", timeout: int = 300) -> R
 
 
 def run_on_host(args: list[str], timeout: int = 300) -> RunResult:
-    """Roda `email-agent <args>` sempre no host (ex.: gmail auth, abre navegador)."""
+    """Roda `agent <args>` sempre no host (ex.: gmail auth, abre navegador)."""
     return _run([*_local_argv(), *args], "host", timeout)
 
 

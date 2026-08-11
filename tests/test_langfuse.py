@@ -109,22 +109,22 @@ def test_langfuse_client_registers_flush_atexit(monkeypatch):
     monkeypatch.setattr(llm_client.atexit, "register", lambda fn: registered.append(fn))
 
     fake_client = SimpleNamespace(flush=lambda: None)
+    constructor_kwargs = []
     monkeypatch.setattr(
         llm_client, "get_settings",
         lambda: _settings(langfuse_enabled=True, langfuse_base_url="http://lf"),
     )
 
-    class _FakeLangfuse:
-        def __init__(self, **kwargs):
-            pass
-
     import sys
     import types as _types
     fake_mod = _types.ModuleType("langfuse")
-    fake_mod.Langfuse = lambda **kw: fake_client
+    fake_mod.Langfuse = lambda **kw: constructor_kwargs.append(kw) or fake_client
     monkeypatch.setitem(sys.modules, "langfuse", fake_mod)
 
     client = llm_client._langfuse_client()
     assert client is fake_client
+    assert constructor_kwargs == [{
+        "public_key": "", "secret_key": "", "base_url": "http://lf",
+    }]
     assert fake_client.flush in registered
     llm_client._langfuse_client.cache_clear()

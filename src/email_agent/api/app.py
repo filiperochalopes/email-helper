@@ -10,7 +10,7 @@ from email_agent.logging_setup import configure_logging
 from email_agent.models import EmailAccount, EmailMessage, db_session
 
 configure_logging()
-app = FastAPI(title="email-agent", version="0.1.0")
+app = FastAPI(title="email-helper", version="0.1.0")
 app.include_router(cleanup_router)
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"

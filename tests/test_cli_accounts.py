@@ -101,21 +101,3 @@ def test_gmail_auth_database_unavailable_explains_import(monkeypatch):
     assert "RuntimeError" in result.output
     assert "accounts import-yaml" in result.output
     assert "sync once --account filipe@noharm.ai" in result.output
-
-
-def test_relabel_legacy_uses_bounded_batch(monkeypatch):
-    from email_agent.sync import service
-
-    received = []
-    monkeypatch.setattr(
-        service,
-        "reclassify_legacy_inbox",
-        lambda limit: received.append(limit)
-        or {"reclassified": limit, "cleanup_candidates": 3, "errors": 0},
-    )
-
-    result = runner.invoke(cli.app, ["relabel", "legacy", "--limit", "12"])
-
-    assert result.exit_code == 0
-    assert received == [12]
-    assert "cleanup_candidates" in result.output

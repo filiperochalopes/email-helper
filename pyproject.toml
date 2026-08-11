@@ -1,5 +1,5 @@
 [project]
-name = "email-agent"
+name = "email-helper"
 version = "0.1.0"
 description = "Assistente local de foco e limpeza de múltiplas contas de e-mail, com busca PostgreSQL e LLM configurável."
 requires-python = ">=3.12"
@@ -34,7 +34,7 @@ dev = [
 ]
 
 [project.scripts]
-email-agent = "email_agent.cli.app:app"
+agent = "email_agent.cli.app:app"
 
 [build-system]
 requires = ["hatchling"]

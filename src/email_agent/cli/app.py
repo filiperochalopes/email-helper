@@ -1,4 +1,4 @@
-"""CLI administrativa do email-agent (Typer + Rich)."""
+"""CLI administrativa do email-helper (Typer + Rich)."""
 from datetime import UTC
 
 import typer
@@ -17,7 +17,7 @@ from email_agent.models import (
     db_session,
 )
 
-app = typer.Typer(help="email-agent: monitoramento e classificação de e-mails")
+app = typer.Typer(help="email-helper: foco e limpeza de e-mails")
 console = Console()
 
 sync_app = typer.Typer(help="Sincronização")
@@ -430,8 +430,8 @@ def sync_once(account: str = typer.Option(..., "--account")):
             console.print(f"[red]Conta não cadastrada no banco:[/red] {account}")
             console.print(
                 "Importe as contas declaradas em secrets/accounts.yml e tente novamente:\n"
-                "  [bold]docker compose exec email-triage-app email-agent accounts import-yaml[/bold]\n"
-                f"  [bold]docker compose exec email-triage-app email-agent sync once --account {account}[/bold]",
+                "  [bold]docker compose exec email-helper-app agent accounts import-yaml[/bold]\n"
+                f"  [bold]docker compose exec email-helper-app agent sync once --account {account}[/bold]",
                 soft_wrap=True,
             )
             all_accs = session.execute(select(EmailAccount)).scalars().all()
@@ -464,16 +464,6 @@ def relabel_message(id: str = typer.Option(..., "--id")):
 
     state = run_pipeline(msg.id)
     console.print({k: state.get(k) for k in ("category", "priority", "suggested_labels")})
-
-
-@relabel_app.command("legacy")
-def relabel_legacy(
-    limit: int = typer.Option(40, "--limit", min=1, max=500),
-):
-    """Reprocessa um lote da Inbox ainda classificado pelo pipeline antigo."""
-    from email_agent.sync.service import reclassify_legacy_inbox
-
-    console.print(reclassify_legacy_inbox(limit=limit))
 
 
 # ---------- rules ----------
@@ -570,7 +560,7 @@ def accounts_list():
 def gmail_auth(email: str):
     """Fluxo OAuth interativo. RODAR NO HOST (precisa de navegador), não no container:
 
-        .venv/bin/email-agent gmail auth conta@gmail.com
+        .venv/bin/agent gmail auth conta@gmail.com
 
     No host, exporte as variáveis apontando para as portas/paths publicados:
         DATABASE_URL=postgresql+psycopg://emailagent:emailagent@localhost:5433/emailagent
@@ -583,7 +573,7 @@ def gmail_auth(email: str):
     console.print(f"[green]OAuth concluído para {email}.[/green] Token salvo.")
 
     # auth_status no banco é best-effort: se o DB não estiver acessível do host
-    # (ex.: host 'email-triage-db' não resolve fora do Docker), não perdemos o token — o
+    # (ex.: host 'email-helper-db' não resolve fora do Docker), não perdemos o token — o
     # próximo sync atualiza o status.
     try:
         with db_session() as session:
@@ -596,17 +586,17 @@ def gmail_auth(email: str):
                 console.print(
                     f"[yellow]A conta {email} ainda não está cadastrada no banco.[/yellow]\n"
                     "Conclua com:\n"
-                    "  [bold]docker compose exec email-triage-app email-agent accounts import-yaml[/bold]\n"
-                    f"  [bold]docker compose exec email-triage-app email-agent sync once --account {email}[/bold]",
+                    "  [bold]docker compose exec email-helper-app agent accounts import-yaml[/bold]\n"
+                    f"  [bold]docker compose exec email-helper-app agent sync once --account {email}[/bold]",
                     soft_wrap=True,
                 )
     except Exception as exc:  # noqa: BLE001
         console.print(
             f"[yellow]Token salvo.[/yellow] Não marquei auth_status=ok no banco a partir do "
-            f"host ({exc.__class__.__name__} — 'email-triage-db' só resolve dentro do Docker).\n"
+            f"host ({exc.__class__.__name__} — 'email-helper-db' só resolve dentro do Docker).\n"
             "Importe a declaração da conta e rode o sync no container:\n"
-            "  [bold]docker compose exec email-triage-app email-agent accounts import-yaml[/bold]\n"
-            f"  [bold]docker compose exec email-triage-app email-agent sync once --account {email}[/bold]",
+            "  [bold]docker compose exec email-helper-app agent accounts import-yaml[/bold]\n"
+            f"  [bold]docker compose exec email-helper-app agent sync once --account {email}[/bold]",
             soft_wrap=True,
         )
 

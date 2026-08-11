@@ -1,4 +1,4 @@
-# email-agent — diretrizes para agentes
+# email-helper — diretrizes para agentes
 
 Agente Python para várias contas Gmail/IMAP, com triagem por adapter de LLM,
 revisão conservadora de limpeza e resumo opcional via WhatsApp (Evolution API
@@ -8,7 +8,7 @@ Operação: [README.md](README.md).
 ## Arquitetura (resumo)
 
 - `src/email_agent/` — pacote único; entrypoints: API FastAPI (`api/app.py`) e
-  CLI Typer (`cli/app.py`, comando `email-agent`). A web local usa HTML/JS e
+  CLI Typer (`cli/app.py`, comando `agent`). A web local usa HTML/JS e
   Tailwind compilado em `web/`; Node é somente ferramenta de build. Não há broker
   nem workers.
 - Fluxo: sync (`sync/`) → persistência+dedup (`sync/persist.py`) → triagem pela
@@ -16,9 +16,9 @@ Operação: [README.md](README.md).
 - Models SQLAlchemy todos em `models/entities.py` (consolidado de propósito — facilita
   autogenerate do Alembic). Migrations em `migrations/`.
 - Contas declaradas em `secrets/accounts.yml` (ver `secrets/accounts.example.yml`);
-  importadas com `email-agent accounts import-yaml`.
+  importadas com `agent accounts import-yaml`.
 - Regras de importância por conta em `secrets/rules.yml` (descrição pt-BR + outcome),
-  importadas com `email-agent rules import-yaml`, avaliadas pelo nó `apply_rules` do grafo
+  importadas com `agent rules import-yaml`, avaliadas pelo nó `apply_rules` do grafo
   via LLM (uma chamada adicional por e-mail quando a conta tem regras). Tabela `email_rule`.
 
 ## Regras inegociáveis (política do MVP)
@@ -35,7 +35,8 @@ Operação: [README.md](README.md).
 4. Toda inferência passa por `intelligence/llm_client.py`; não importar SDK de provider em
    outros módulos. Providers permitidos: `ollama` e `openai_compatible`. Ollama é a opção
    local padrão; provider externo envia o trecho do e-mail presente no prompt. Langfuse é
-   uma exportação independente e só liga quando ambas as chaves estão configuradas.
+   uma exportação independente e só liga quando ambas as chaves estão configuradas. O SDK
+   v4 requer servidor self-hosted >= 3.63.0; não adicionar fallback de ingestão antigo.
 5. Falha em uma conta não pode interromper o processamento das demais (capturar, logar, seguir).
 6. Spam do provedor é **sinal**, não verdade.
 
@@ -77,20 +78,20 @@ Operação: [README.md](README.md).
 
 ```bash
 # Testes unitários (preferencial: dentro do container)
-docker compose exec email-triage-app pytest
+docker compose exec email-helper-app pytest
 # ou local (uv + Python 3.12; o host tem 3.14, não use o python do sistema)
 uv venv --python 3.12 .venv && uv pip install -p .venv/bin/python -e ".[dev]" && .venv/bin/pytest
 
 # Stack: subir, migrar, smoke
 docker compose up -d --build
-docker compose exec email-triage-app alembic upgrade head
+docker compose exec email-helper-app alembic upgrade head
 curl -s localhost:8010/health        # porta 8010 no host (8000 está ocupada nesta máquina)
-docker compose exec email-triage-app email-agent accounts list
-docker compose exec email-triage-app email-agent digest          # gera resumo sem enviar
+docker compose exec email-helper-app agent accounts list
+docker compose exec email-helper-app agent digest          # gera resumo sem enviar
 ```
 
 Toda mudança em `models/entities.py` exige migration:
-`docker compose exec email-triage-app alembic revision --autogenerate -m "..."` + revisar o arquivo gerado.
+`docker compose exec email-helper-app alembic revision --autogenerate -m "..."` + revisar o arquivo gerado.
 
 Novos comportamentos de triagem devem ganhar teste em `tests/test_triage.py`.
 Endpoints e ações da web devem ganhar teste em `tests/test_api_cleanup.py`.

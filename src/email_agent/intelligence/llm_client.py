@@ -40,7 +40,12 @@ def _langfuse_client():
     try:
         from langfuse import Langfuse
 
-        kwargs = {"host": settings.langfuse_base_url} if settings.langfuse_base_url else {}
+        kwargs = {
+            "public_key": settings.langfuse_public_key,
+            "secret_key": settings.langfuse_secret_key,
+        }
+        if settings.langfuse_base_url:
+            kwargs["base_url"] = settings.langfuse_base_url
         client = Langfuse(**kwargs)
         atexit.register(client.flush)
         return client

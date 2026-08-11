@@ -1,4 +1,4 @@
-"""TUI vintage para contas e regras. Entrypoint: `email-agent tui`.
+"""TUI vintage para contas e regras. Entrypoint: `agent tui`.
 
 Fluxo: edita o YAML (fonte de verdade) → `import-yaml` sincroniza o banco. Reauth
 do Gmail roda no host (abre navegador). Nada aqui deleta e-mails nem chama LLM

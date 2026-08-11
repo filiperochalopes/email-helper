@@ -44,41 +44,6 @@ def classify_pending(limit: int = 2000) -> dict:
     return {"classified": done, "errors": errors}
 
 
-def reclassify_legacy_inbox(limit: int = 40) -> dict:
-    """Atualiza em lote classificações antigas, sem ação automática no provedor."""
-    with db_session() as session:
-        message_ids = list(
-            session.execute(
-                select(EmailMessage.id)
-                .join(
-                    EmailClassification,
-                    EmailClassification.message_id == EmailMessage.id,
-                )
-                .where(
-                    EmailMessage.mailbox == "INBOX",
-                    EmailMessage.is_sent_by_user.is_(False),
-                    EmailClassification.llm_provider == "legacy",
-                )
-                .order_by(EmailMessage.date.desc().nullslast())
-                .limit(max(1, min(limit, 500)))
-            ).scalars()
-        )
-    done = errors = candidates = 0
-    for db_id in message_ids:
-        try:
-            result = classify_message(db_id)
-            done += 1
-            candidates += int(result.get("cleanup_candidate", False))
-        except Exception as exc:  # noqa: BLE001
-            errors += 1
-            log.error("legacy_retriage_failed", db_message_id=db_id, error=str(exc))
-    return {
-        "reclassified": done,
-        "cleanup_candidates": candidates,
-        "errors": errors,
-    }
-
-
 def sync_one_account(account_id: int, provider: str, bootstrap: bool) -> dict:
     if provider == "gmail_api":
         from email_agent.sync.gmail_sync import sync_account

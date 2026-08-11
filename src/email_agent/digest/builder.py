@@ -38,7 +38,7 @@ MAX_CLEANUP = 15
 PRIORITIZE_THRESHOLD = 5
 
 # Prefixo das dicas de investigação no rodapé das mensagens.
-DOCKER = "docker compose exec -it app email-agent"
+DOCKER = "docker compose exec -it email-helper-app agent"
 
 
 @dataclass

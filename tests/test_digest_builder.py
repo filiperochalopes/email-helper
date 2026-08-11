@@ -48,4 +48,4 @@ def test_cleanup_message_has_delete_hint_and_ids():
 def test_news_footer_uses_docker_exec_it():
     pairs = [(_msg("E-1"), _cls(category="noticia"))]
     text = builder._build_news(pairs)
-    assert "docker compose exec -it app email-agent feedback <ID>" in text
+    assert "docker compose exec -it email-helper-app agent feedback <ID>" in text

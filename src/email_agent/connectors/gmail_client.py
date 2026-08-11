@@ -1,7 +1,7 @@
 """Cliente Gmail API com OAuth2 offline e marcação de reauth_required.
 
 Tokens ficam em GMAIL_TOKEN_STORAGE_PATH/<email>.json. A autorização inicial
-é feita FORA do Docker (precisa de navegador):  email-agent gmail auth CONTA
+é feita FORA do Docker (precisa de navegador):  agent gmail auth CONTA
 """
 import logging
 import os

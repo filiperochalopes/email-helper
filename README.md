@@ -1,4 +1,4 @@
-# email-agent
+# email-helper
 
 Assistente para várias contas Gmail e IMAP. Sincroniza mensagens, faz uma
 leitura estruturada por LLM, oferece busca local rápida e monta uma fila
@@ -13,8 +13,8 @@ Python 3.12 · FastAPI · PostgreSQL 16 · SQLAlchemy/Alembic · Gmail API · IM
 Typer/Rich · adapter HTTP de LLM · Langfuse opt-in.
 
 Não há Celery, Valkey, workers, LangGraph, LangChain, sklearn, treinamento
-noturno ou Label Studio. O runtime normal tem apenas `email-triage-app` e
-`email-triage-db`; uma
+noturno ou Label Studio. O runtime normal tem apenas `email-helper-app` e
+`email-helper-db`; uma
 falha em uma conta não interrompe as demais.
 
 ## Configuração
@@ -23,8 +23,8 @@ falha em uma conta não interrompe as demais.
 cp .env.example .env
 cp secrets/accounts.example.yml secrets/accounts.yml
 docker compose up -d --build
-docker compose exec email-triage-app alembic upgrade head
-docker compose exec email-triage-app email-agent accounts import-yaml
+docker compose exec email-helper-app alembic upgrade head
+docker compose exec email-helper-app agent accounts import-yaml
 ```
 
 `secrets/accounts.yml` é obrigatório, local e ignorado pelo Git. Tokens Gmail
@@ -69,16 +69,17 @@ Ela oferece busca, filtros por conta/categoria, carregamento progressivo, modo
 pré-selecionados; o usuário pode corrigir a seleção antes de Arquivar ou mover
 até 200 mensagens por vez para a Lixeira recuperável.
 
-Classificações do pipeline antigo não têm `cleanup_candidate`. Antes de
-reprocessar em lote, valide uma mensagem com o modelo configurado:
+Para iniciar com uma base vazia, importe as contas e sincronize as pastas
+declaradas na configuração local:
 
 ```bash
-docker compose exec email-triage-app email-agent relabel message --id E-YYYYMMDD-NNNNNN
-docker compose exec email-triage-app email-agent relabel legacy --limit 40
+docker compose exec email-helper-app agent accounts import-yaml
+docker compose exec email-helper-app agent sync all --bootstrap
 ```
 
-Repita o segundo comando em lotes confortáveis para o hardware local. Nenhum
-desses comandos arquiva ou apaga mensagens; apenas atualiza a leitura no banco.
+O bootstrap usa `DEFAULT_SYNC_SINCE_DAYS` como janela histórica, sincroniza as
+contas de forma independente e classifica cada mensagem nova. Ele não arquiva
+nem envia nada para a Lixeira.
 
 Tailwind é compilado em desenvolvimento e o CSS gerado é servido pelo FastAPI;
 Node não faz parte do runtime:
@@ -97,9 +98,9 @@ A busca usa duas estratégias complementares, sem outro serviço:
 - fuzzy match com `pg_trgm` e índices GIN em assunto, nome e e-mail do remetente.
 
 ```bash
-docker compose exec email-triage-app email-agent search -q "contrato renovação"
-docker compose exec email-triage-app email-agent search -q "nome com erro de digitacao"
-docker compose exec email-triage-app email-agent search --from fornecedor --category documento
+docker compose exec email-helper-app agent search -q "contrato renovação"
+docker compose exec email-helper-app agent search -q "nome com erro de digitacao"
+docker compose exec email-helper-app agent search --from fornecedor --category documento
 ```
 
 A migration também troca índices redundantes por índices alinhados às consultas:
@@ -117,15 +118,14 @@ medir recall e latência.
 
 ```bash
 # sync → leitura LLM → digest
-docker compose exec email-triage-app email-agent run
-docker compose exec email-triage-app email-agent run --send
+docker compose exec email-helper-app agent run
+docker compose exec email-helper-app agent run --send
 
-docker compose exec email-triage-app email-agent sync all
-docker compose exec email-triage-app email-agent sync all --bootstrap
-docker compose exec email-triage-app email-agent relabel all
-docker compose exec email-triage-app email-agent relabel legacy --limit 40
-docker compose exec email-triage-app email-agent digest
-docker compose exec email-triage-app email-agent show E-YYYYMMDD-NNNNNN
+docker compose exec email-helper-app agent sync all
+docker compose exec email-helper-app agent sync all --bootstrap
+docker compose exec email-helper-app agent relabel all
+docker compose exec email-helper-app agent digest
+docker compose exec email-helper-app agent show E-YYYYMMDD-NNNNNN
 ```
 
 O agendamento permanece externo ao aplicativo. Durante desenvolvimento, execute
@@ -155,6 +155,11 @@ move mensagem e não chama a Lixeira. Os únicos labels opcionais no provedor s�
 inicializado. Ao ativá-lo, prompts e respostas são enviados à instância
 configurada, independentemente de o provider de inferência ser local.
 
+O projeto usa o SDK Python v4 e exige Langfuse self-hosted `>= 3.63.0` para
+tracing. O cliente recebe `public_key`, `secret_key` e `base_url` explicitamente
+e faz `flush()` ao encerrar comandos curtos. Instâncias anteriores precisam ser
+atualizadas; não há fallback para o protocolo de ingestão antigo.
+
 ## Segurança
 
 - O pipeline automático nunca apaga, expurga ou move para Trash/Spam.
@@ -165,8 +170,8 @@ configurada, independentemente de o provider de inferência ser local.
 ## Verificação
 
 ```bash
-docker compose exec email-triage-app alembic current
-docker compose exec email-triage-app ruff check src tests migrations
-docker compose exec email-triage-app pytest
+docker compose exec email-helper-app alembic current
+docker compose exec email-helper-app ruff check src tests migrations
+docker compose exec email-helper-app pytest
 curl -fsSL http://127.0.0.1:8010/health
 ```

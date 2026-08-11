@@ -1,4 +1,4 @@
-"""Todos os models SQLAlchemy do email-agent.
+"""Todos os models SQLAlchemy do email-helper.
 
 Mantidos num único módulo para facilitar autogenerate do Alembic; o pacote
 ``email_agent.models`` reexporta tudo.

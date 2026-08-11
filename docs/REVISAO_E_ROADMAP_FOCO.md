@@ -1,4 +1,4 @@
-# Revisão e roadmap: email-agent focado
+# Revisão e roadmap: email-helper focado
 
 Revisão iniciada em 09/08/2026 e atualizada em 10/08/2026. Escopo: simplificar o produto para uma pessoa que
 administra várias caixas e quer uma Inbox calma, com IA local. Esta revisão não
@@ -58,7 +58,7 @@ cria uma pasta concorrente.
 
 | Componente | Situação | Direção |
 | --- | --- | --- |
-| Celery, Valkey, worker e beat | Três processos de aplicação para uma rotina pessoal previsível. | **Removidos**; `email-agent run` executa sync e triagem em sequência. |
+| Celery, Valkey, worker e beat | Três processos de aplicação para uma rotina pessoal previsível. | **Removidos**; `agent run` executa sync e triagem em sequência. |
 | FastAPI | Hoje só expõe saúde e status administrativo. | Manter como servidor da interface web local. |
 | LangGraph | O grafo era linear. | **Removido**; pipeline Python explícito. |
 | Label Studio | Outro serviço e outra fila de revisão. | **Removido**; a fila do produto é a revisão humana. |
@@ -187,7 +187,7 @@ flowchart LR
     F --> C
 ```
 
-O fluxo normal será `email-agent run`: sincroniza, atualiza a fila e gera digest
+O fluxo normal será `agent run`: sincroniza, atualiza a fila e gera digest
 opcional. PostgreSQL é o único serviço obrigatório; Ollama pode seguir nativo no
 host ou ser substituído por endpoint compatível. Langfuse é opt-in.
 

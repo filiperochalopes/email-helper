@@ -97,10 +97,6 @@ def upgrade() -> None:
     op.add_column("email_classification", sa.Column("llm_output_tokens", sa.Integer()))
     op.add_column("email_classification", sa.Column("llm_latency_ms", sa.Integer()))
     op.add_column("email_classification", sa.Column("llm_error", sa.Text()))
-    op.execute(
-        "UPDATE email_classification SET llm_provider = 'legacy', llm_model = NULL "
-        "WHERE llm_model = 'rules+sgd+ollama'"
-    )
 
 
 def downgrade() -> None:
