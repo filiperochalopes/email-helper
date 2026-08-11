@@ -163,7 +163,7 @@ class EmailRule(Base):
     condition_json: Mapped[dict] = mapped_column(JSON)
     action_json: Mapped[dict] = mapped_column(JSON)
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
-    created_by: Mapped[str] = mapped_column(String(20), default="user")  # user|agent|system
+    created_by: Mapped[str] = mapped_column(String(20), default="user")  # user|web|agent|system
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     requires_review: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

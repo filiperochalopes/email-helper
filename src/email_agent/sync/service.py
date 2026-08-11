@@ -1,6 +1,9 @@
 """Orquestração síncrona e leve de sync + triagem, sem broker ou workers."""
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from sqlalchemy import select
 
+from email_agent.config import get_settings
 from email_agent.intelligence.graph import run_pipeline
 from email_agent.logging_setup import get_logger
 from email_agent.models import EmailAccount, EmailClassification, EmailMessage, db_session
@@ -22,6 +25,26 @@ def classify_message(db_message_id: int) -> dict:
     }
 
 
+def _classify_many(db_message_ids: list[int]) -> tuple[int, int]:
+    """Classifica mensagens em paralelo, limitado pela configuração da LLM."""
+    if not db_message_ids:
+        return 0, 0
+
+    max_workers = max(1, get_settings().llm_max_concurrency)
+    done = errors = 0
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="llm-triage") as pool:
+        futures = {pool.submit(classify_message, db_id): db_id for db_id in db_message_ids}
+        for future in as_completed(futures):
+            db_id = futures[future]
+            try:
+                future.result()
+                done += 1
+            except Exception as exc:  # noqa: BLE001
+                errors += 1
+                log.error("message_triage_failed", db_message_id=db_id, error=str(exc))
+    return done, errors
+
+
 def classify_pending(limit: int = 2000) -> dict:
     with db_session() as session:
         classified = select(EmailClassification.message_id)
@@ -33,14 +56,7 @@ def classify_pending(limit: int = 2000) -> dict:
                 .limit(limit)
             ).scalars()
         )
-    done = errors = 0
-    for db_id in pending:
-        try:
-            classify_message(db_id)
-            done += 1
-        except Exception as exc:  # noqa: BLE001
-            errors += 1
-            log.error("message_triage_failed", db_message_id=db_id, error=str(exc))
+    done, errors = _classify_many(pending)
     return {"classified": done, "errors": errors}
 
 
@@ -50,14 +66,7 @@ def sync_one_account(account_id: int, provider: str, bootstrap: bool) -> dict:
     else:
         from email_agent.sync.imap_sync import sync_account
     new_ids = sync_account(account_id, bootstrap=bootstrap)
-    classified = errors = 0
-    for db_id in new_ids:
-        try:
-            classify_message(db_id)
-            classified += 1
-        except Exception as exc:  # noqa: BLE001
-            errors += 1
-            log.error("message_triage_failed", db_message_id=db_id, error=str(exc))
+    classified, errors = _classify_many(new_ids)
     return {"new_messages": len(new_ids), "classified": classified, "errors": errors}
 
 

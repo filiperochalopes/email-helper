@@ -64,7 +64,8 @@ Operação: [README.md](README.md).
   `port`/`starttls`/`ssl` são configuráveis por conta em `accounts.yml`.
 - Evolution API é **v2**: payload plano `{"number", "text"}`, header `apikey`. Não regredir para
   o formato v1 `textMessage`.
-- LLM: `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_TOKEN` e `LLM_MODEL` são o único contrato
+- LLM: `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_TOKEN`, `LLM_MODEL` e
+  `LLM_MAX_CONCURRENCY` são o único contrato
   de configuração. `generate_json()` retorna `LLMCallResult`; chamadas devem tratar erro
   conservadoramente. A triagem persiste provider, modelo, versão do prompt, JSON bruto,
   latência, tokens e erro em `email_classification`. Detalhes em

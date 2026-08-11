@@ -17,6 +17,7 @@ LLM_PROVIDER=ollama
 LLM_BASE_URL=http://host.docker.internal:11434
 LLM_API_TOKEN=
 LLM_MODEL=gemma4:e2b-mlx
+LLM_MAX_CONCURRENCY=6
 ```
 
 Valores aceitos para `LLM_PROVIDER`:
@@ -28,6 +29,8 @@ Valores aceitos para `LLM_PROVIDER`:
 
 O mesmo modelo atende triagem, regras e priorização. Isso reduz configuração e
 torna custo/latência mensuráveis antes de reintroduzir roteamento por tarefa.
+As classificações usam um pool local limitado por `LLM_MAX_CONCURRENCY`. Cada
+tarefa abre sua própria sessão de banco; o valor mínimo efetivo é 1.
 
 ## Persistência
 

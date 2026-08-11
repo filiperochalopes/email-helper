@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://host.docker.internal:11434"
     llm_api_token: str = ""
     llm_model: str = "qwen3:8b"
+    llm_max_concurrency: int = 1
 
     default_sync_since_days: int = 365
     max_email_text_chars: int = 12000

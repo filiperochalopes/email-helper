@@ -42,6 +42,7 @@ LLM_PROVIDER=ollama
 LLM_BASE_URL=http://host.docker.internal:11434
 LLM_API_TOKEN=
 LLM_MODEL=gemma4:e2b-mlx
+LLM_MAX_CONCURRENCY=6
 ```
 
 API compatível com OpenAI:
@@ -51,11 +52,14 @@ LLM_PROVIDER=openai_compatible
 LLM_BASE_URL=https://api.openai.com
 LLM_API_TOKEN=troque-aqui
 LLM_MODEL=gpt-5-mini
+LLM_MAX_CONCURRENCY=6
 ```
 
 Use `LLM_PROVIDER=disabled` para rodar sem inferência. Nesse caso, mensagens
 novas falham de forma conservadora para Revisar. Providers externos recebem o
 trecho do e-mail usado no prompt; Ollama local não envia esse conteúdo por si.
+`LLM_MAX_CONCURRENCY` limita quantas mensagens são classificadas simultaneamente;
+use um valor compatível com a memória disponível para o modelo.
 
 Cada leitura principal é salva em `email_classification`, incluindo resultado
 JSON normalizado e bruto, provider, modelo, versão do prompt, latência, tokens e

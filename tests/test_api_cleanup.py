@@ -63,3 +63,10 @@ def test_candidate_payload_never_exposes_full_body():
     assert payload["snippet"] == "Uma prévia curta"
     assert "normalized_text" not in payload
     assert "body" not in payload
+
+
+def test_blacklist_request_accepts_only_sender_or_domain():
+    assert cleanup.BlacklistRequest(target="sender").target == "sender"
+    assert cleanup.BlacklistRequest(target="domain").target == "domain"
+    with pytest.raises(ValueError):
+        cleanup.BlacklistRequest(target="subject")

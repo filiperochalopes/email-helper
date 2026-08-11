@@ -8,7 +8,13 @@ from sqlalchemy import func, select
 
 from email_agent.actions.archive_actions import archive_message
 from email_agent.actions.delete_actions import trash_message
-from email_agent.models import EmailAccount, EmailClassification, EmailMessage, db_session
+from email_agent.models import (
+    EmailAccount,
+    EmailClassification,
+    EmailMessage,
+    EmailRule,
+    db_session,
+)
 from email_agent.search import email_search_statement
 
 router = APIRouter(prefix="/api/cleanup", tags=["cleanup"])
@@ -18,6 +24,10 @@ class BulkActionRequest(BaseModel):
     action: Literal["archive", "trash"]
     ids: list[str] = Field(min_length=1, max_length=200)
     confirmed: bool = False
+
+
+class BlacklistRequest(BaseModel):
+    target: Literal["sender", "domain"]
 
 
 def _candidate_payload(
@@ -99,6 +109,59 @@ def list_cleanup_messages(
         "has_more": page * page_size < total,
         "accounts": list(accounts),
     }
+
+
+@router.get("/messages/{email_agent_id}")
+def get_cleanup_message(email_agent_id: str) -> dict:
+    """Retorna o texto normalizado somente após seleção explícita na interface."""
+    with db_session() as session:
+        row = session.execute(
+            select(EmailMessage, EmailAccount)
+            .join(EmailAccount, EmailAccount.id == EmailMessage.account_id)
+            .where(EmailMessage.email_agent_id == email_agent_id)
+        ).one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
+        msg, account = row
+        classification = max(msg.classifications, key=lambda item: item.id) if msg.classifications else None
+        return {
+            **_candidate_payload(msg, classification, account),
+            "body": msg.normalized_text or msg.snippet or "",
+        }
+
+
+@router.post("/messages/{email_agent_id}/blacklist")
+def add_message_to_blacklist(email_agent_id: str, request: BlacklistRequest) -> dict:
+    """Cria blacklist determinística; a ação automática continua sendo só uma label."""
+    with db_session() as session:
+        msg = session.execute(
+            select(EmailMessage).where(EmailMessage.email_agent_id == email_agent_id)
+        ).scalar_one_or_none()
+        if msg is None:
+            raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
+        sender = (msg.from_email or "").strip().lower()
+        if "@" not in sender:
+            raise HTTPException(status_code=400, detail="Remetente sem endereço válido.")
+        value = sender if request.target == "sender" else sender.rsplit("@", 1)[1]
+        slug = value.replace("@", "-at-").replace(".", "-")
+        name = f"spam-{request.target}-{slug}"[:200]
+        rule = session.execute(select(EmailRule).where(EmailRule.name == name)).scalar_one_or_none()
+        if rule is None:
+            rule = EmailRule(name=name, rule_type="spam", created_by="web")
+            session.add(rule)
+        rule.rule_type = "spam"
+        rule.condition_json = {
+            "scope": "*",
+            "description": f"Blacklist criada pela interface para {value}.",
+            "match": {request.target: value},
+        }
+        rule.action_json = {
+            "priority": "ignore",
+            "category": "spam_suspeito",
+            "labels": ["AI/Spam Suspeito"],
+        }
+        rule.is_active = True
+    return {"status": "created", "target": request.target, "value": value}
 
 
 @router.post("/bulk-action")
