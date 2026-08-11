@@ -168,6 +168,8 @@ def upsert_rule(data: CommentedMap, entry: dict) -> None:
     rule["name"] = (entry.get("name") or "").strip()
     rule["scope"] = (entry.get("scope") or "*").strip()
     rule["description"] = (entry.get("description") or "").strip()
+    if entry.get("match"):
+        rule["match"] = CommentedMap(entry["match"])
     outcome = CommentedMap()
     raw = entry.get("outcome") or {}
     if (raw.get("priority") or "").strip():
@@ -208,10 +210,23 @@ def spam_domain_rule(domain: str) -> dict:
     return {
         "name": f"spam-dominio-{domain.replace('.', '-')}",
         "scope": "*",
+        "match": {"domain": domain},
         "description": (
             f"Mensagens cujo remetente é do domínio {domain} costumam ser spam/propaganda "
             f"não solicitada. Trate como spam suspeito, salvo se for uma resposta direta a "
             f"algo que eu enviei."
         ),
+        "outcome": {"priority": "ignore", "labels": ["AI/Spam Suspeito"]},
+    }
+
+
+def spam_sender_rule(sender: str) -> dict:
+    """Template de blacklist determinística para um remetente exato."""
+    sender = sender.strip().lower()
+    return {
+        "name": f"spam-remetente-{sender.replace('@', '-at-').replace('.', '-')}",
+        "scope": "*",
+        "match": {"sender": sender},
+        "description": f"Mensagens do remetente {sender} devem ser tratadas como spam suspeito.",
         "outcome": {"priority": "ignore", "labels": ["AI/Spam Suspeito"]},
     }

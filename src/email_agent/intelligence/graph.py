@@ -5,7 +5,12 @@ mais LangGraph, modelos sklearn ou treinamento noturno.
 """
 from email_agent.actions.safety_gate import plan_safe_actions
 from email_agent.intelligence.followup import detect_followup_waiting_response
-from email_agent.intelligence.rule_agent import evaluate_rules_llm, load_rules_for_account
+from email_agent.intelligence.rule_agent import (
+    evaluate_rules_llm,
+    load_rules_for_account,
+    load_spam_rules_for_account,
+    match_spam_rule,
+)
 from email_agent.intelligence.state import EmailAgentState
 from email_agent.intelligence.triage import TRIAGE_PROMPT_VERSION, triage_email
 from email_agent.models import EmailAccount, EmailClassification, EmailMessage, db_session
@@ -40,6 +45,32 @@ def load_email(state: EmailAgentState) -> EmailAgentState:
 
 
 def classify_message(state: EmailAgentState) -> EmailAgentState:
+    # Blacklists explícitas têm precedência sobre a avaliação do conteúdo e não
+    # enviam corpo/assunto à LLM. Mensagens do próprio usuário nunca são bloqueadas.
+    if not state.get("is_sent_by_user"):
+        with db_session() as session:
+            rules = load_spam_rules_for_account(session, state.get("account_email", ""))
+        matched = match_spam_rule(state.get("from_email", ""), rules)
+        if matched is not None:
+            action = matched.action_json or {}
+            labels = action.get("labels") or ["AI/Spam Suspeito"]
+            return {
+                "blacklist_matched": True,
+                "spam_score": 1.0,
+                "spam_reason": f"blacklist explícita: regra '{matched.name}'",
+                "importance_score": 0.0,
+                "importance_reason": f"blacklist explícita: regra '{matched.name}'",
+                "priority": "ignore",
+                "category": "spam_suspeito",
+                "confidence": 1.0,
+                "action_required": False,
+                "cleanup_candidate": False,
+                "cleanup_reason": "",
+                "digest_summary": "Remetente ou domínio marcado como spam suspeito.",
+                "suggested_labels": labels,
+                "needs_human_review": False,
+                "llm_prompt_version": "blacklist-v1",
+            }
     provider_labels = [str(label).upper() for label in state.get("current_provider_labels", [])]
     in_spam = state.get("mailbox", "").upper() in {"SPAM", "JUNK"} or "SPAM" in provider_labels
     attachments = [
@@ -87,6 +118,8 @@ def classify_message(state: EmailAgentState) -> EmailAgentState:
 
 
 def detect_followup(state: EmailAgentState) -> EmailAgentState:
+    if state.get("blacklist_matched"):
+        return {"is_followup_waiting_response": False}
     if not state.get("is_sent_by_user"):
         return {"is_followup_waiting_response": False}
     with db_session() as session:
@@ -110,6 +143,8 @@ _PRIORITY_RANK = {"P0": 3, "P1": 2, "P2": 1, "ignore": 0}
 
 def apply_rules(state: EmailAgentState) -> EmailAgentState:
     """Avalia apenas regras explícitas do usuário pela LLM configurada."""
+    if state.get("blacklist_matched"):
+        return {}
     with db_session() as session:
         account = session.get(EmailAccount, state["account_id"])
         rules = load_rules_for_account(session, account.email_address)

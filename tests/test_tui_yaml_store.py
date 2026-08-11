@@ -71,6 +71,13 @@ def test_rule_invalid_priority(tmp_path):
 def test_spam_domain_rule_is_label_only():
     rule = ys.spam_domain_rule("@Promo.Exemplo.com")
     assert rule["name"] == "spam-dominio-promo-exemplo-com"
+    assert rule["match"] == {"domain": "promo.exemplo.com"}
     assert rule["outcome"]["labels"] == ["AI/Spam Suspeito"]
     # política do MVP: nunca deleção automática
     assert rule["outcome"]["priority"] == "ignore"
+
+
+def test_spam_sender_rule_has_exact_structured_match():
+    rule = ys.spam_sender_rule(" Pessoa@Exemplo.com ")
+    assert rule["match"] == {"sender": "pessoa@exemplo.com"}
+    assert rule["outcome"]["labels"] == ["AI/Spam Suspeito"]

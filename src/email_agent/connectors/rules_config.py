@@ -11,6 +11,9 @@ rules:
       priority: P0             # P0|P1|P2|ignore (opcional)
       category: documento_fiscal   # categoria interna (opcional)
       labels: [AI/Foco]  # labels AI a sugerir (opcional)
+
+Blacklists podem declarar ``match: {sender: pessoa@exemplo.com}`` ou
+``match: {domain: exemplo.com}``; elas são avaliadas antes da LLM.
 """
 import os
 
@@ -43,16 +46,19 @@ def import_rules(path: str | None = None) -> dict[str, int]:
             rule = session.execute(
                 select(EmailRule).where(EmailRule.name == name)
             ).scalar_one_or_none()
+            match = entry.get("match") or {}
+            rule_type = "spam" if match.get("sender") or match.get("domain") else "importance"
             if rule is None:
-                rule = EmailRule(name=name, rule_type="importance", created_by="user")
+                rule = EmailRule(name=name, rule_type=rule_type, created_by="user")
                 session.add(rule)
                 created += 1
             else:
                 updated += 1
-            rule.rule_type = "importance"
+            rule.rule_type = rule_type
             rule.condition_json = {
                 "scope": entry.get("scope", "*"),
                 "description": entry.get("description", "").strip(),
+                **({"match": match} if match else {}),
             }
             rule.action_json = entry.get("outcome", {})
             rule.is_active = entry.get("active", True)
@@ -60,7 +66,10 @@ def import_rules(path: str | None = None) -> dict[str, int]:
         # regras importadas que sumiram do YAML => desativa (não apaga)
         deactivated = 0
         for rule in session.execute(
-            select(EmailRule).where(EmailRule.rule_type == "importance", EmailRule.created_by == "user")
+            select(EmailRule).where(
+                EmailRule.rule_type.in_(("importance", "spam")),
+                EmailRule.created_by == "user",
+            )
         ).scalars():
             if rule.name not in declared and rule.is_active:
                 rule.is_active = False

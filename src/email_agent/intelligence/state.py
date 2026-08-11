@@ -24,6 +24,7 @@ class EmailAgentState(TypedDict, total=False):
     current_provider_labels: list[str]
     current_ai_labels: list[str]
     signals: dict[str, Any]
+    blacklist_matched: bool
     spam_score: float
     spam_reason: str
     importance_score: float

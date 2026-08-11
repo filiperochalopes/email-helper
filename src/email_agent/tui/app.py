@@ -292,7 +292,7 @@ def email_screen() -> None:
             f"AÇÕES · {eid}",
             ["Excluir (mover para a Lixeira)", "Arquivar (Archive)",
              "Categorizar (aplicar label AI)",
-             "Criar regra com o domínio do remetente", "Recarregar", "Voltar"],
+             "Marcar domínio/remetente como spam suspeito", "Recarregar", "Voltar"],
         )
         if choice in (None, 5):
             return
@@ -356,10 +356,18 @@ def _email_rule_from_domain(data: dict) -> None:
     if not domain:
         info_panel(console, "AVISO", "Remetente sem domínio identificável.", ok=False)
         return
-    prefilled = ys.spam_domain_rule(domain)
+    sel = select_menu(
+        console,
+        "BLACKLIST — aplicar a",
+        [f"Remetente exato ({from_email})", f"Domínio ({domain})", "Cancelar"],
+    )
+    if sel is None or sel == 2:
+        return
+    prefilled = ys.spam_sender_rule(from_email) if sel == 0 else ys.spam_domain_rule(domain)
     console.clear()
     banner(console)
-    console.print(f"Pré-preenchido para o domínio [bold]{domain}[/bold]. "
+    target = from_email if sel == 0 else domain
+    console.print(f"Pré-preenchido para [bold]{target}[/bold]. "
                   "Ajuste como quiser (Enter mantém o sugerido).\n")
     entry = _rule_form(prefilled)
     if not entry:
@@ -374,7 +382,7 @@ def _email_rule_from_domain(data: dict) -> None:
     console.print("\nImportando regra para o banco…")
     res = runner.run_in_stack(["rules", "import-yaml"])
     info_panel(console, "Regra criada" if res.ok else "Regra salva (import com avisos)",
-               f"Regra '{entry['name']}' para {domain}.\n\n"
+               f"Regra '{entry['name']}' para {target}.\n\n"
                + (res.stdout + "\n" + res.stderr).strip(), ok=res.ok)
 
 
@@ -420,7 +428,7 @@ def _rule_form(current: dict | None = None) -> dict | None:
     name = ask("Nome único", default=current.get("name", ""))
     if not name:
         return None
-    return {
+    result = {
         "name": name,
         "scope": ask("Escopo (e-mail da conta ou *)", default=current.get("scope", "*")),
         "description": ask("Descrição em pt-BR para o LLM", default=current.get("description", "")),
@@ -431,6 +439,9 @@ def _rule_form(current: dict | None = None) -> dict | None:
                           default=",".join(outcome.get("labels", []))),
         },
     }
+    if current.get("match"):
+        result["match"] = dict(current["match"])
+    return result
 
 
 def _add_rule(data) -> None:

@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 
 from email_agent.intelligence import triage
+from email_agent.intelligence.graph import apply_rules
 from email_agent.intelligence.llm_client import LLMCallResult
 from email_agent.intelligence.triage import normalize_triage
+from email_agent.intelligence.rule_agent import match_spam_rule
 
 
 def _result(**changes):
@@ -74,3 +76,19 @@ def test_triage_carries_llm_audit_metadata(monkeypatch):
     assert result.llm_raw_result == payload
     assert result.llm_input_tokens == 100
     assert result.llm_latency_ms == 321
+
+
+def test_spam_blacklist_matches_sender_and_domain_without_content_evaluation():
+    sender_rule = SimpleNamespace(
+        condition_json={"match": {"sender": "blocked@example.com"}}
+    )
+    domain_rule = SimpleNamespace(
+        condition_json={"match": {"domain": "marketing.example"}}
+    )
+    assert match_spam_rule("BLOCKED@example.com", [sender_rule]) is sender_rule
+    assert match_spam_rule("news@sub.marketing.example", [domain_rule]) is domain_rule
+    assert match_spam_rule("news@notmarketing.example", [domain_rule]) is None
+
+
+def test_spam_blacklist_prevents_later_importance_evaluation():
+    assert apply_rules({"blacklist_matched": True}) == {}

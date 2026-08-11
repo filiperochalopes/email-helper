@@ -16,6 +16,30 @@ from email_agent.models import EmailRule
 
 log = get_logger(__name__)
 
+
+def load_spam_rules_for_account(session: Session, account_email: str) -> list[EmailRule]:
+    """Carrega blacklists estruturadas; elas não dependem de inferência da LLM."""
+    rules = session.execute(
+        select(EmailRule).where(EmailRule.is_active.is_(True), EmailRule.rule_type == "spam")
+    ).scalars().all()
+    return [r for r in rules if (r.condition_json or {}).get("scope", "*") in ("*", account_email)]
+
+
+def match_spam_rule(from_email: str, rules: list[EmailRule]) -> EmailRule | None:
+    sender = (from_email or "").strip().lower()
+    sender_domain = sender.rsplit("@", 1)[1] if "@" in sender else ""
+    for rule in rules:
+        match = (rule.condition_json or {}).get("match") or {}
+        blocked_sender = str(match.get("sender") or "").strip().lower()
+        blocked_domain = str(match.get("domain") or "").strip().lstrip("@").lower()
+        if blocked_sender and sender == blocked_sender:
+            return rule
+        if blocked_domain and (
+            sender_domain == blocked_domain or sender_domain.endswith(f".{blocked_domain}")
+        ):
+            return rule
+    return None
+
 PROMPT = """Você é um classificador de e-mails. Avalie quais REGRAS se aplicam ao e-mail.
 Responda SOMENTE com JSON: {{"matches": [{{"rule": <número>, "applies": true|false, "priority": "P0|P1|P2|ignore|null", "reason": "curto"}}]}}
 Aplique uma regra apenas se o e-mail claramente se encaixa na descrição dela (incluindo as exceções).
