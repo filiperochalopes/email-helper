@@ -1,7 +1,9 @@
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.dialects import postgresql
 
 from email_agent.api import cleanup
 
@@ -70,3 +72,22 @@ def test_blacklist_request_accepts_only_sender_or_domain():
     assert cleanup.BlacklistRequest(target="domain").target == "domain"
     with pytest.raises(ValueError):
         cleanup.BlacklistRequest(target="subject")
+
+
+def test_message_statement_supports_date_priority_and_priority_sort():
+    statement = cleanup._message_statement(
+        page_size=40,
+        mode="all",
+        priority="P0",
+        date_from=date(2026, 8, 1),
+        date_to=date(2026, 8, 11),
+        sort="priority",
+    )
+    sql = str(statement.compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+    ))
+
+    assert "email_classification.priority = 'P0'" in sql
+    assert "date(email_message.date) >= '2026-08-01'" in sql
+    assert "date(email_message.date) <= '2026-08-11'" in sql
+    assert "CASE WHEN (email_classification.priority = 'P0') THEN 0" in sql

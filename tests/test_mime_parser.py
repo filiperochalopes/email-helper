@@ -28,6 +28,13 @@ def test_parse_basic():
     assert not parsed.has_attachment
 
 
+def test_plain_text_preserves_paragraphs_and_lists():
+    body = "Primeiro parágrafo.\n\n- item um\n- item dois\n\nÚltimo parágrafo."
+    parsed = parse_mime_bytes(_build_email(body=body))
+
+    assert "Primeiro parágrafo.\n\n- item um\n- item dois\n\nÚltimo parágrafo." in parsed.normalized_text
+
+
 def test_parse_attachment():
     parsed = parse_mime_bytes(_build_email(attach_pdf=True))
     assert parsed.has_attachment

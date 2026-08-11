@@ -26,24 +26,63 @@
           <span class="sr-only">Buscar mensagens</span>
           <input id="search-input" type="search" placeholder="Buscar em remetente, assunto ou conteúdo…" autocomplete="off" />
         </label>
-        <select id="account-filter" aria-label="Filtrar por conta"><option value="">Todas as contas</option></select>
-        <select id="category-filter" aria-label="Filtrar por categoria">
-          <option value="">Todas as categorias</option>
-          <option value="marketing">Marketing</option><option value="promocao">Promoção</option>
-          <option value="spam_suspeito">Spam suspeito</option><option value="followup_sem_acao">Follow-up sem ação</option>
-          <option value="ignorar">Ignorar</option><option value="noticia">Notícia</option><option value="documento">Documento</option>
-        </select>
         <div id="mode-tabs" class="segmented" aria-label="Modo da lista">
-          <button data-mode="candidates" class="mode-tab is-active">Sugestões</button>
+          <button data-mode="candidates" class="mode-tab is-active">Sugestões de limpeza</button>
           <button data-mode="all" class="mode-tab">Inbox</button>
+        </div>
+        <div class="toolbar-menu-wrap">
+          <button id="filter-toggle" class="toolbar-button" type="button" aria-expanded="false" aria-controls="filter-panel">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+            Filtros <span id="filter-count" class="control-badge hidden">0</span>
+          </button>
+          <div id="filter-panel" class="toolbar-popover filter-panel hidden">
+            <div class="popover-heading"><strong>Filtrar mensagens</strong><button id="clear-filters" class="text-button" type="button">Limpar filtros</button></div>
+            <label>Conta<select id="account-filter"><option value="">Todas as contas</option></select></label>
+            <label>Categoria<select id="category-filter">
+              <option value="">Todas as categorias</option>
+              <option value="marketing">Marketing</option><option value="promocao">Promoção</option>
+              <option value="spam_suspeito">Spam suspeito</option><option value="followup_sem_acao">Follow-up sem ação</option>
+              <option value="ignorar">Ignorar</option><option value="noticia">Notícia</option><option value="documento">Documento</option>
+              <option value="documento_fiscal">Documento fiscal</option><option value="aguardando_resposta">Aguardando resposta</option>
+              <option value="importante_p0">Importante P0</option><option value="importante_p1">Importante P1</option><option value="revisar">Revisar</option>
+            </select></label>
+            <label>Prioridade<select id="priority-filter">
+              <option value="">Todas as prioridades</option><option value="P0">P0 — urgente</option>
+              <option value="P1">P1 — importante</option><option value="P2">P2 — normal</option><option value="ignore">Ignorar</option>
+            </select></label>
+            <label>Período<select id="date-preset">
+              <option value="">Qualquer data</option><option value="today">Hoje</option><option value="yesterday">Ontem</option>
+              <option value="last7">Últimos 7 dias</option><option value="last30">Últimos 30 dias</option><option value="custom">Personalizado</option>
+            </select></label>
+            <div id="custom-date-range" class="date-range hidden">
+              <label>De<input id="date-from" type="date" /></label><label>Até<input id="date-to" type="date" /></label>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar-menu-wrap">
+          <button id="sort-toggle" class="toolbar-button" type="button" aria-expanded="false" aria-controls="sort-panel">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 6h12M8 12h9M8 18h6M4 4v16m0 0-2-2m2 2 2-2" /></svg>
+            <span id="sort-label">Mais recentes</span>
+          </button>
+          <div id="sort-panel" class="toolbar-popover sort-panel hidden">
+            <strong>Ordenar por</strong>
+            <button type="button" data-sort="newest" class="is-active">Mais recentes primeiro</button>
+            <button type="button" data-sort="oldest">Mais antigos primeiro</button>
+            <button type="button" data-sort="priority">Prioridade: P0 → ignorar</button>
+          </div>
         </div>
       </div>
 
       <main class="mail-layout">
         <section class="list-pane" aria-label="Mensagens">
           <div class="list-heading">
-            <div><strong>Caixa de entrada</strong><span id="selected-count">0 selecionadas</span></div>
-            <button id="select-visible" class="text-button" type="button">Selecionar visíveis</button>
+            <div class="list-title">
+              <label class="check-wrap list-select-all" title="Selecionar todas as mensagens carregadas">
+                <input id="select-all" class="message-checkbox" type="checkbox" />
+                <span class="sr-only">Selecionar todas as mensagens carregadas</span>
+              </label>
+              <strong>Caixa de entrada</strong><span id="selected-count">0 selecionadas</span>
+            </div>
           </div>
           <div id="results-section" class="results" aria-live="polite" aria-busy="false">
             <div id="loading-state" class="loading-list"><span></span><span></span><span></span><span></span></div>
@@ -64,12 +103,13 @@
             <header class="reader-header">
               <button id="reader-back" class="reader-back" type="button">Voltar à lista</button>
               <div class="reader-title-row">
-                <div><h1 id="reader-subject"></h1><p id="reader-meta"></p></div>
+                <div class="reader-identity"><span id="reader-avatar" class="reader-avatar" aria-hidden="true">?</span><div><h1 id="reader-subject"></h1><p id="reader-meta"></p></div></div>
                 <span id="reader-date"></span>
               </div>
               <div id="reader-tags" class="reader-tags"></div>
             </header>
-            <div id="reader-body" class="reader-body"></div>
+            <div id="reader-cleanup" class="reader-cleanup hidden"></div>
+            <div id="reader-body" class="reader-body" role="document"></div>
           </article>
         </section>
       </main>

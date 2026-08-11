@@ -1,10 +1,11 @@
 """API local da fila de limpeza e das ações humanas em lote."""
 
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from email_agent.actions.archive_actions import archive_message
 from email_agent.actions.delete_actions import trash_message
@@ -28,6 +29,68 @@ class BulkActionRequest(BaseModel):
 
 class BlacklistRequest(BaseModel):
     target: Literal["sender", "domain"]
+
+
+PriorityFilter = Literal["P0", "P1", "P2", "ignore"]
+SortOrder = Literal["newest", "oldest", "priority"]
+
+
+def _message_statement(
+    *,
+    page_size: int,
+    mode: Literal["candidates", "all"] = "candidates",
+    query: str | None = None,
+    account: str | None = None,
+    category: str | None = None,
+    priority: PriorityFilter | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    sort: SortOrder = "newest",
+):
+    """Monta a mesma consulta para listagem e seleção, sem expor o corpo."""
+    statement = email_search_statement(
+        query=query,
+        category=category,
+        priority=priority,
+        limit=page_size,
+    )
+    statement = statement.join(
+        EmailAccount, EmailAccount.id == EmailMessage.account_id
+    ).add_columns(EmailAccount)
+    statement = statement.where(
+        EmailMessage.mailbox == "INBOX",
+        EmailMessage.is_sent_by_user.is_(False),
+    )
+    if mode == "candidates":
+        statement = statement.where(EmailClassification.cleanup_candidate.is_(True))
+    if account:
+        statement = statement.where(EmailAccount.email_address == account)
+    if date_from:
+        statement = statement.where(func.date(EmailMessage.date) >= date_from)
+    if date_to:
+        statement = statement.where(func.date(EmailMessage.date) <= date_to)
+
+    priority_rank = case(
+        (EmailClassification.priority == "P0", 0),
+        (EmailClassification.priority == "P1", 1),
+        (EmailClassification.priority == "P2", 2),
+        (EmailClassification.priority == "ignore", 3),
+        else_=4,
+    )
+    statement = statement.order_by(None)
+    if sort == "oldest":
+        statement = statement.order_by(
+            EmailMessage.date.asc().nullslast(), EmailMessage.id.asc()
+        )
+    elif sort == "priority":
+        statement = statement.order_by(
+            priority_rank.asc(), EmailMessage.date.desc().nullslast(), EmailMessage.id.desc()
+        )
+    else:
+        statement = statement.order_by(
+            EmailMessage.date.desc().nullslast(), EmailMessage.id.desc()
+        )
+    return statement
 
 
 def _candidate_payload(
@@ -64,24 +127,25 @@ def list_cleanup_messages(
     query: str | None = Query(None, max_length=300),
     account: str | None = Query(None, max_length=320),
     category: str | None = Query(None, max_length=40),
+    priority: PriorityFilter | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    sort: SortOrder = "newest",
 ) -> dict:
     """Lista somente metadados e snippet; o corpo completo nunca vai para a fila."""
-    statement = email_search_statement(
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=400, detail="A data inicial não pode vir após a final.")
+    statement = _message_statement(
+        page_size=page_size,
+        mode=mode,
         query=query,
+        account=account,
         category=category,
-        limit=page_size,
+        priority=priority,
+        date_from=date_from,
+        date_to=date_to,
+        sort=sort,
     )
-    statement = statement.join(
-        EmailAccount, EmailAccount.id == EmailMessage.account_id
-    ).add_columns(EmailAccount)
-    statement = statement.where(
-        EmailMessage.mailbox == "INBOX",
-        EmailMessage.is_sent_by_user.is_(False),
-    )
-    if mode == "candidates":
-        statement = statement.where(EmailClassification.cleanup_candidate.is_(True))
-    if account:
-        statement = statement.where(EmailAccount.email_address == account)
 
     count_statement = select(func.count()).select_from(
         statement.order_by(None).limit(None).offset(None).subquery()
@@ -109,6 +173,42 @@ def list_cleanup_messages(
         "has_more": page * page_size < total,
         "accounts": list(accounts),
     }
+
+
+@router.get("/selection")
+def select_cleanup_suggestions(
+    query: str | None = Query(None, max_length=300),
+    account: str | None = Query(None, max_length=320),
+    category: str | None = Query(None, max_length=40),
+    priority: PriorityFilter | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    sort: SortOrder = "newest",
+) -> dict:
+    """Retorna até 200 IDs sugeridos pela IA dentro dos filtros atuais."""
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=400, detail="A data inicial não pode vir após a final.")
+    statement = _message_statement(
+        page_size=200,
+        mode="candidates",
+        query=query,
+        account=account,
+        category=category,
+        priority=priority,
+        date_from=date_from,
+        date_to=date_to,
+        sort=sort,
+    )
+    count_statement = select(func.count()).select_from(
+        statement.order_by(None).limit(None).offset(None).subquery()
+    )
+    id_statement = statement.with_only_columns(
+        EmailMessage.email_agent_id, maintain_column_froms=True
+    )
+    with db_session() as session:
+        total = session.execute(count_statement).scalar_one()
+        ids = list(session.execute(id_statement).scalars())
+    return {"ids": ids, "total": total, "truncated": total > len(ids)}
 
 
 @router.get("/messages/{email_agent_id}")
@@ -161,6 +261,10 @@ def add_message_to_blacklist(email_agent_id: str, request: BlacklistRequest) -> 
             "labels": ["AI/Spam Suspeito"],
         }
         rule.is_active = True
+        classification = max(msg.classifications, key=lambda item: item.id) if msg.classifications else None
+        if classification:
+            classification.cleanup_candidate = True
+            classification.cleanup_reason = f"Blacklist explícita de {request.target}: {value}."
     return {"status": "created", "target": request.target, "value": value}
 
 

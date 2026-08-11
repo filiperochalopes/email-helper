@@ -142,14 +142,20 @@ O agendamento permanece externo ao aplicativo. Durante desenvolvimento, execute
 ## Triagem e limpeza
 
 Cada mensagem recebe categoria, prioridade, resumo, confiança, necessidade de
-ação e `cleanup_candidate`. A pré-seleção é deliberadamente pouco sensível: só
+ação e `cleanup_candidate`. A sugestão de limpeza é deliberadamente pouco sensível: só
 marketing, promoção, spam claro, aviso sem valor futuro ou follow-up sem ação
-podem ser sugeridos. Documento, cobrança, segurança, conversa pessoal, prazo,
-anexo relevante e dúvida nunca são pré-selecionados.
+podem ser sugeridos. Remetentes e domínios incluídos explicitamente na blacklist
+também viram sugestão. Documento, cobrança, segurança, conversa pessoal, prazo,
+anexo relevante e dúvida nunca são sugeridos.
 
 `cleanup_candidate` vive somente no PostgreSQL. A triagem não cria label, não
 move mensagem e não chama a Lixeira. Os únicos labels opcionais no provedor são
 `AI/Foco` e `AI/Spam Suspeito`.
+
+Na web, **Sugestões de limpeza** mostra os candidatos dentro dos filtros atuais.
+O checkbox ao lado de “Caixa de entrada” seleciona as mensagens carregadas e
+fica parcialmente marcado quando só parte delas está selecionada. A seleção
+também aceita Shift-clique; nenhuma mensagem é movida sem a confirmação final.
 
 ## Arquivo
 

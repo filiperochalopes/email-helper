@@ -98,10 +98,12 @@ A tela principal de limpeza deve ter:
 
 - lista paginada/infinita com checkbox, conta, remetente, assunto, data, snippet
   e motivo da sugestão;
-- itens `cleanup_candidate=true` pré-selecionados; os demais permanecem visíveis
-  e podem ser selecionados manualmente;
+- botão explícito para selecionar itens `cleanup_candidate=true`; os demais
+  permanecem visíveis e podem ser selecionados manualmente;
 - seleção persistente enquanto o usuário rola e uma barra fixa com contagem;
-- filtros Marketing, Spam suspeito, Follow-up sem ação e Outros;
+- seleção do viewport, desseleção total e intervalo com Shift-clique;
+- filtros por conta, categoria, prioridade e período, além de ordenação por data
+  ou prioridade;
 - botão único **Mover selecionados para a Lixeira**, seguido de confirmação com
   contagem por conta;
 - falha de uma conta não bloqueia as outras; o resultado informa sucesso/erro

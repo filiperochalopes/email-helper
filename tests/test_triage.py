@@ -1,10 +1,13 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 
-from email_agent.intelligence import triage
+import pytest
+
+from email_agent.intelligence import graph, triage
 from email_agent.intelligence.graph import apply_rules
 from email_agent.intelligence.llm_client import LLMCallResult
-from email_agent.intelligence.triage import normalize_triage
 from email_agent.intelligence.rule_agent import match_spam_rule
+from email_agent.intelligence.triage import normalize_triage
 
 
 def _result(**changes):
@@ -92,3 +95,23 @@ def test_spam_blacklist_matches_sender_and_domain_without_content_evaluation():
 
 def test_spam_blacklist_prevents_later_importance_evaluation():
     assert apply_rules({"blacklist_matched": True}) == {}
+
+
+def test_spam_blacklist_becomes_cleanup_suggestion_without_calling_llm(monkeypatch):
+    rule = SimpleNamespace(
+        name="spam-domain-example",
+        condition_json={"match": {"domain": "marketing.example"}},
+        action_json={"labels": ["AI/Spam Suspeito"]},
+    )
+    monkeypatch.setattr(graph, "db_session", lambda: nullcontext(None))
+    monkeypatch.setattr(graph, "load_spam_rules_for_account", lambda *_: [rule])
+    monkeypatch.setattr(graph, "triage_email", lambda **_: pytest.fail("LLM não deve ser chamada"))
+
+    result = graph.classify_message({
+        "account_email": "me@example.com",
+        "from_email": "news@marketing.example",
+        "is_sent_by_user": False,
+    })
+
+    assert result["cleanup_candidate"] is True
+    assert "blacklist" in result["cleanup_reason"].lower()

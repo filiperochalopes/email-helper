@@ -1,5 +1,6 @@
 """Parser MIME: bytes brutos (RFC 822) -> dicionário normalizado."""
 import hashlib
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from email import message_from_bytes, policy
@@ -7,6 +8,14 @@ from email.message import EmailMessage as PyEmailMessage
 from email.utils import getaddresses, parsedate_to_datetime
 
 from email_agent.parsing.html_cleaner import clean_html_to_text
+
+
+def _normalize_plain_text(text: str, max_chars: int) -> str:
+    """Remove ruído horizontal sem destruir parágrafos, listas e citações."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = "\n".join(re.sub(r"[ \t]+", " ", line).strip() for line in normalized.split("\n"))
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized).strip()
+    return normalized[:max_chars]
 
 
 @dataclass
@@ -78,7 +87,7 @@ def parse_mime_bytes(raw: bytes, max_chars: int = 12000) -> ParsedEmail:
             text_html = part.get_content()
 
     if text_plain and text_plain.strip():
-        normalized = " ".join(text_plain.split())[:max_chars]
+        normalized = _normalize_plain_text(text_plain, max_chars)
     elif text_html:
         normalized = clean_html_to_text(text_html, max_chars=max_chars)
     else:
