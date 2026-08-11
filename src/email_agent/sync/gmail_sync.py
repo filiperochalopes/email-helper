@@ -23,7 +23,9 @@ MONITORED_QUERY = "in:inbox OR in:spam OR in:sent"
 CURSOR_MAILBOX = "_gmail_history"
 
 
-def sync_account(account_id: int, bootstrap: bool = False) -> list[int]:
+def sync_account(
+    account_id: int, bootstrap: bool = False, limit: int | None = None
+) -> list[int]:
     with db_session() as session:
         account = session.get(EmailAccount, account_id)
     service = get_service(account)
@@ -49,7 +51,9 @@ def sync_account(account_id: int, bootstrap: bool = False) -> list[int]:
         days = get_settings().default_sync_since_days if bootstrap else 7
         message_ids, new_history_id = _ids_from_search(service, days=days)
 
-    new_db_ids = _fetch_and_persist(service, account, message_ids)
+    new_db_ids, fully_scanned = _fetch_and_persist(
+        service, account, message_ids, limit=limit
+    )
 
     with db_session() as session:
         cursor = session.execute(
@@ -60,7 +64,9 @@ def sync_account(account_id: int, bootstrap: bool = False) -> list[int]:
         if cursor is None:
             cursor = MailboxCursor(account_id=account_id, mailbox=CURSOR_MAILBOX)
             session.add(cursor)
-        if new_history_id:
+        # Não avança o historyId quando o limite interrompeu a coleta. Assim a
+        # próxima execução retoma os IDs ainda não persistidos, sem lacunas.
+        if new_history_id and fully_scanned:
             cursor.last_history_id = str(new_history_id)
         cursor.last_sync_at = datetime.now(UTC)
         cursor.sync_status = "ok"
@@ -115,7 +121,9 @@ def _ids_from_search(service, days: int) -> tuple[list[str], str | None]:
     return ids, profile.get("historyId")
 
 
-def _fetch_and_persist(service, account: EmailAccount, message_ids: list[str]) -> list[int]:
+def _fetch_and_persist(
+    service, account: EmailAccount, message_ids: list[str], limit: int | None = None
+) -> tuple[list[int], bool]:
     new_db_ids: list[int] = []
     for mid in message_ids:
         try:
@@ -169,7 +177,9 @@ def _fetch_and_persist(service, account: EmailAccount, message_ids: list[str]) -
             )
             if is_new:
                 new_db_ids.append(msg.id)
-    return new_db_ids
+                if limit is not None and len(new_db_ids) >= limit:
+                    return new_db_ids, False
+    return new_db_ids, True
 
 
 def _mailbox_from_labels(labels: list[str]) -> str:

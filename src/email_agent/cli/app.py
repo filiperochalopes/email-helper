@@ -413,15 +413,21 @@ def run(
 # ---------- sync / relabel ----------
 
 @sync_app.command("all")
-def sync_all(bootstrap: bool = typer.Option(False, "--bootstrap")):
+def sync_all(
+    bootstrap: bool = typer.Option(False, "--bootstrap"),
+    limit: int = typer.Option(None, "--limit", min=1, help="Máximo de mensagens novas por conta."),
+):
     from email_agent.sync.service import sync_all_accounts
 
-    result = sync_all_accounts(bootstrap=bootstrap)
+    result = sync_all_accounts(bootstrap=bootstrap, limit=limit)
     console.print(result)
 
 
 @sync_app.command("once")
-def sync_once(account: str = typer.Option(..., "--account")):
+def sync_once(
+    account: str = typer.Option(..., "--account"),
+    limit: int = typer.Option(None, "--limit", min=1, help="Máximo de mensagens novas."),
+):
     with db_session() as session:
         acc = session.execute(
             select(EmailAccount).where(EmailAccount.email_address == account)
@@ -444,7 +450,7 @@ def sync_once(account: str = typer.Option(..., "--account")):
     from email_agent.sync.service import sync_one_account
 
     try:
-        console.print(sync_one_account(account_id, provider, bootstrap=False))
+        console.print(sync_one_account(account_id, provider, bootstrap=False, limit=limit))
     except Exception as exc:
         console.print(f"[red]Falha ao sincronizar {account}:[/red] {exc}")
         raise typer.Exit(1) from exc

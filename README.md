@@ -81,6 +81,10 @@ docker compose exec email-helper-app agent accounts import-yaml
 docker compose exec email-helper-app agent sync all --bootstrap
 ```
 
+Para validar a interface e a observabilidade com uma amostra pequena de uma
+conta, use `agent sync once --account EMAIL --limit 20`. O cursor só avança até
+as mensagens realmente coletadas, portanto o restante não é perdido.
+
 O bootstrap usa `DEFAULT_SYNC_SINCE_DAYS` como janela histórica, sincroniza as
 contas de forma independente e classifica cada mensagem nova. Ele não arquiva
 nem envia nada para a Lixeira.

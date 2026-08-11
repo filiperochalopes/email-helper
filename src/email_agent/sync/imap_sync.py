@@ -26,7 +26,9 @@ def _get_cursor(session, account_id: int, mailbox: str) -> MailboxCursor:
     return cursor
 
 
-def sync_account(account_id: int, bootstrap: bool = False) -> list[int]:
+def sync_account(
+    account_id: int, bootstrap: bool = False, limit: int | None = None
+) -> list[int]:
     """Sincroniza uma conta IMAP. Retorna ids (banco) apenas das mensagens novas
     da INBOX e Sent — spam/trash são persistidos para dedup mas não classificados
     (evita que o agente aplique labels AI em emails já descartados pelo usuário)."""
@@ -55,8 +57,13 @@ def sync_account(account_id: int, bootstrap: bool = False) -> list[int]:
         if folders["trash"]:
             monitored.append(("trash", folders["trash"]))  # type: ignore[arg-type]
         for role, folder in monitored:
+            remaining = None if limit is None else limit - len(classify_ids)
+            if remaining is not None and remaining <= 0:
+                break
             try:
-                new_ids = _sync_folder(client, account, role, folder, bootstrap, settings)
+                new_ids = _sync_folder(
+                    client, account, role, folder, bootstrap, settings, limit=remaining
+                )
                 if role in ("inbox", "sent"):
                     classify_ids += new_ids
                 # spam/trash: persistidos para dedup, não enfileirados para classificação
@@ -68,7 +75,10 @@ def sync_account(account_id: int, bootstrap: bool = False) -> list[int]:
     return classify_ids
 
 
-def _sync_folder(client, account, role: str, folder: str, bootstrap: bool, settings) -> list[int]:
+def _sync_folder(
+    client, account, role: str, folder: str, bootstrap: bool, settings,
+    limit: int | None = None,
+) -> list[int]:
     new_ids: list[int] = []
     info = client.select_folder(folder, readonly=True)
     uidvalidity = info.get(b"UIDVALIDITY")
@@ -97,6 +107,9 @@ def _sync_folder(client, account, role: str, folder: str, bootstrap: bool, setti
             cursor.last_sync_at = datetime.now(UTC)
             cursor.sync_status = "ok"
         return []
+
+    if limit is not None:
+        uids = uids[:limit]
 
     for batch_start in range(0, len(uids), 50):
         batch = uids[batch_start : batch_start + 50]

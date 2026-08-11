@@ -60,17 +60,19 @@ def classify_pending(limit: int = 2000) -> dict:
     return {"classified": done, "errors": errors}
 
 
-def sync_one_account(account_id: int, provider: str, bootstrap: bool) -> dict:
+def sync_one_account(
+    account_id: int, provider: str, bootstrap: bool, limit: int | None = None
+) -> dict:
     if provider == "gmail_api":
         from email_agent.sync.gmail_sync import sync_account
     else:
         from email_agent.sync.imap_sync import sync_account
-    new_ids = sync_account(account_id, bootstrap=bootstrap)
+    new_ids = sync_account(account_id, bootstrap=bootstrap, limit=limit)
     classified, errors = _classify_many(new_ids)
     return {"new_messages": len(new_ids), "classified": classified, "errors": errors}
 
 
-def sync_all_accounts(bootstrap: bool = False) -> dict:
+def sync_all_accounts(bootstrap: bool = False, limit: int | None = None) -> dict:
     """Sincroniza contas em sequência; a falha de uma nunca interrompe as outras."""
     with db_session() as session:
         accounts = list(
@@ -83,7 +85,9 @@ def sync_all_accounts(bootstrap: bool = False) -> dict:
     results = {}
     for account_id, provider, email_address in plan:
         try:
-            results[email_address] = sync_one_account(account_id, provider, bootstrap)
+            results[email_address] = sync_one_account(
+                account_id, provider, bootstrap, limit=limit
+            )
         except Exception as exc:  # noqa: BLE001
             log.error("account_sync_failed", account=email_address, error=str(exc))
             results[email_address] = {"error": str(exc)}
