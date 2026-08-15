@@ -22,6 +22,7 @@ def classify_message(db_message_id: int) -> dict:
         "category": state.get("category"),
         "priority": state.get("priority"),
         "cleanup_candidate": state.get("cleanup_candidate", False),
+        "cleanup_action": state.get("cleanup_action", "none"),
     }
 
 
@@ -57,6 +58,20 @@ def classify_pending(limit: int = 2000) -> dict:
             ).scalars()
         )
     done, errors = _classify_many(pending)
+    return {"classified": done, "errors": errors}
+
+
+def reclassify_all(limit: int = 2000) -> dict:
+    """Reexecuta a triagem já persistida, somente por comando humano explícito."""
+    with db_session() as session:
+        message_ids = list(
+            session.execute(
+                select(EmailMessage.id)
+                .order_by(EmailMessage.id.desc())
+                .limit(max(1, min(limit, 10000)))
+            ).scalars()
+        )
+    done, errors = _classify_many(message_ids)
     return {"classified": done, "errors": errors}
 
 

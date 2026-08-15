@@ -29,6 +29,8 @@ class ParsedAttachment:
 @dataclass
 class ParsedEmail:
     message_id_header: str | None
+    in_reply_to_header: str | None
+    references: list[str]
     from_email: str | None
     from_name: str | None
     to: list[str]
@@ -95,6 +97,8 @@ def parse_mime_bytes(raw: bytes, max_chars: int = 12000) -> ParsedEmail:
 
     return ParsedEmail(
         message_id_header=(msg.get("Message-ID") or "").strip() or None,
+        in_reply_to_header=(msg.get("In-Reply-To") or "").strip() or None,
+        references=(msg.get("References") or "").split(),
         from_email=(from_email or "").lower() or None,
         from_name=from_name or None,
         to=to,

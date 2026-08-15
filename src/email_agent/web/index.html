@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>Email Helper</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/static/app.css" />
     <script src="/static/app.js" defer></script>
   </head>
@@ -22,14 +23,15 @@
       </header>
 
       <div class="toolbar">
+        <div id="mode-tabs" class="mode-tabs" role="tablist" aria-label="Modo da lista">
+          <button data-mode="all" class="mode-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="results-section">Inbox</button>
+          <button data-mode="trash" class="mode-tab" type="button" role="tab" aria-selected="false" aria-controls="results-section" title="Sugestões para a Lixeira">Lixeira</button>
+          <button data-mode="archive" class="mode-tab" type="button" role="tab" aria-selected="false" aria-controls="results-section" title="Sugestões para arquivar">Arquivo</button>
+        </div>
         <label class="search-box">
           <span class="sr-only">Buscar mensagens</span>
           <input id="search-input" type="search" placeholder="Buscar em remetente, assunto ou conteúdo…" autocomplete="off" />
         </label>
-        <div id="mode-tabs" class="segmented" aria-label="Modo da lista">
-          <button data-mode="candidates" class="mode-tab is-active">Sugestões de limpeza</button>
-          <button data-mode="all" class="mode-tab">Inbox</button>
-        </div>
         <div class="toolbar-menu-wrap">
           <button id="filter-toggle" class="toolbar-button" type="button" aria-expanded="false" aria-controls="filter-panel">
             <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
@@ -68,7 +70,7 @@
             <strong>Ordenar por</strong>
             <button type="button" data-sort="newest" class="is-active">Mais recentes primeiro</button>
             <button type="button" data-sort="oldest">Mais antigos primeiro</button>
-            <button type="button" data-sort="priority">Prioridade: P0 → ignorar</button>
+            <button type="button" data-sort="priority">Prioridade: revisão → P0 → ignorar</button>
           </div>
         </div>
       </div>
@@ -81,7 +83,7 @@
                 <input id="select-all" class="message-checkbox" type="checkbox" />
                 <span class="sr-only">Selecionar todas as mensagens carregadas</span>
               </label>
-              <strong>Caixa de entrada</strong><span id="selected-count">0 selecionadas</span>
+              <strong id="list-title-label">Inbox completa</strong><span id="selected-count">0 selecionadas</span>
             </div>
           </div>
           <div id="results-section" class="results" aria-live="polite" aria-busy="false">
@@ -97,7 +99,7 @@
           <div id="reader-empty" class="reader-empty">
             <strong>Selecione uma mensagem</strong>
             <span>O conteúdo completo aparecerá aqui.</span>
-            <small>Use o botão direito sobre uma linha para adicionar remetente ou domínio à blacklist.</small>
+            <small>Use o botão direito sobre uma linha para arquivar, excluir ou adicionar à blacklist.</small>
           </div>
           <article id="reader-content" class="reader-content hidden">
             <header class="reader-header">
@@ -116,6 +118,9 @@
     </div>
 
     <div id="context-menu" class="context-menu hidden" role="menu">
+      <div class="context-title">Ações</div>
+      <button data-context-action="archive" role="menuitem">Arquivar</button>
+      <button data-context-action="trash" role="menuitem">Excluir (mover à Lixeira)</button>
       <div class="context-title">Adicionar à blacklist</div>
       <button data-blacklist="sender" role="menuitem">Este remetente</button>
       <button data-blacklist="domain" role="menuitem">Todo o domínio</button>

@@ -98,14 +98,14 @@ A tela principal de limpeza deve ter:
 
 - lista paginada/infinita com checkbox, conta, remetente, assunto, data, snippet
   e motivo da sugestão;
-- botão explícito para selecionar itens `cleanup_candidate=true`; os demais
-  permanecem visíveis e podem ser selecionados manualmente;
+- modos separados por ícone para sugestões de arquivo, sugestões de Lixeira e
+  Inbox completa; cada modo seleciona somente seu destino;
 - seleção persistente enquanto o usuário rola e uma barra fixa com contagem;
 - seleção do viewport, desseleção total e intervalo com Shift-clique;
 - filtros por conta, categoria, prioridade e período, além de ordenação por data
   ou prioridade;
-- botão único **Mover selecionados para a Lixeira**, seguido de confirmação com
-  contagem por conta;
+- ações explícitas **Arquivar** e **Mover selecionados para a Lixeira**, seguidas
+  de confirmação;
 - falha de uma conta não bloqueia as outras; o resultado informa sucesso/erro
   por mensagem;
 - nenhuma exclusão ao classificar, carregar ou rolar. Só o clique final chama o

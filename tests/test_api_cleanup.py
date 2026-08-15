@@ -55,6 +55,7 @@ def test_candidate_payload_never_exposes_full_body():
         category="marketing",
         priority="ignore",
         cleanup_candidate=True,
+        cleanup_action="trash",
         cleanup_reason="newsletter recorrente",
         confidence=0.94,
     )
@@ -65,6 +66,7 @@ def test_candidate_payload_never_exposes_full_body():
     assert payload["snippet"] == "Uma prévia curta"
     assert "normalized_text" not in payload
     assert "body" not in payload
+    assert payload["cleanup_action"] == "trash"
 
 
 def test_blacklist_request_accepts_only_sender_or_domain():
@@ -90,4 +92,14 @@ def test_message_statement_supports_date_priority_and_priority_sort():
     assert "email_classification.priority = 'P0'" in sql
     assert "date(email_message.date) >= '2026-08-01'" in sql
     assert "date(email_message.date) <= '2026-08-11'" in sql
-    assert "CASE WHEN (email_classification.priority = 'P0') THEN 0" in sql
+    assert "CASE WHEN (email_classification.category = 'revisar') THEN 0" in sql
+    assert "WHEN (email_classification.priority = 'P0') THEN 1" in sql
+
+
+@pytest.mark.parametrize("mode", ["archive", "trash"])
+def test_message_statement_separates_cleanup_destinations(mode):
+    statement = cleanup._message_statement(page_size=40, mode=mode)
+    sql = str(statement.compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+    ))
+    assert f"email_classification.cleanup_action = '{mode}'" in sql

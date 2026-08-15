@@ -142,17 +142,22 @@ O agendamento permanece externo ao aplicativo. Durante desenvolvimento, execute
 ## Triagem e limpeza
 
 Cada mensagem recebe categoria, prioridade, resumo, confiança, necessidade de
-ação e `cleanup_candidate`. A sugestão de limpeza é deliberadamente pouco sensível: só
-marketing, promoção, spam claro, aviso sem valor futuro ou follow-up sem ação
-podem ser sugeridos. Remetentes e domínios incluídos explicitamente na blacklist
-também viram sugestão. Documento, cobrança, segurança, conversa pessoal, prazo,
-anexo relevante e dúvida nunca são sugeridos.
+ação e `cleanup_action` (`none`, `archive` ou `trash`). A triagem recebe a data
+atual, a data da mensagem e, quando disponível, o histórico cronológico da thread.
+Marketing puro, promoção expirada e spam claro podem ser sugeridos para a Lixeira;
+documentos/evidências e conversas resolvidas podem ser sugeridos para arquivamento.
+P0/P1, retorno pendente e dúvida permanecem com `none`.
 
-`cleanup_candidate` vive somente no PostgreSQL. A triagem não cria label, não
+`cleanup_action` vive somente no PostgreSQL. A triagem não cria label, não
 move mensagem e não chama a Lixeira. Os únicos labels opcionais no provedor são
 `AI/Foco` e `AI/Spam Suspeito`.
 
-Na web, **Sugestões de limpeza** mostra os candidatos dentro dos filtros atuais.
+Na web, os modos **Arquivar**, **Lixeira** e **Inbox** separam os destinos.
+Ordenação por prioridade mostra **Revisão** antes de P0; revisão é uma incerteza
+de classificação, não uma prioridade nem um destino de limpeza.
+Após uma mudança de prompt, classificações existentes podem ser atualizadas de
+forma explícita com `agent relabel all --force`; sem `--force`, somente pendentes
+são processadas.
 O checkbox ao lado de “Caixa de entrada” seleciona as mensagens carregadas e
 fica parcialmente marcado quando só parte delas está selecionada. A seleção
 também aceita Shift-clique; nenhuma mensagem é movida sem a confirmação final.
@@ -179,7 +184,7 @@ atualizadas; não há fallback para o protocolo de ingestão antigo.
 - O pipeline automático nunca apaga, expurga ou move para Trash/Spam.
 - `delete` move para a Lixeira recuperável e exige decisão humana.
 - Ações no provedor têm idempotência e log.
-- Falha ou baixa confiança vira revisão e nunca pré-seleção de limpeza.
+- Falha ou baixa confiança vira revisão, categoria `revisar` e nunca pré-seleção de limpeza.
 
 ## Verificação
 

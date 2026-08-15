@@ -38,7 +38,7 @@ SortOrder = Literal["newest", "oldest", "priority"]
 def _message_statement(
     *,
     page_size: int,
-    mode: Literal["candidates", "all"] = "candidates",
+    mode: Literal["archive", "trash", "all"] = "archive",
     query: str | None = None,
     account: str | None = None,
     category: str | None = None,
@@ -61,8 +61,8 @@ def _message_statement(
         EmailMessage.mailbox == "INBOX",
         EmailMessage.is_sent_by_user.is_(False),
     )
-    if mode == "candidates":
-        statement = statement.where(EmailClassification.cleanup_candidate.is_(True))
+    if mode in {"archive", "trash"}:
+        statement = statement.where(EmailClassification.cleanup_action == mode)
     if account:
         statement = statement.where(EmailAccount.email_address == account)
     if date_from:
@@ -71,11 +71,12 @@ def _message_statement(
         statement = statement.where(func.date(EmailMessage.date) <= date_to)
 
     priority_rank = case(
-        (EmailClassification.priority == "P0", 0),
-        (EmailClassification.priority == "P1", 1),
-        (EmailClassification.priority == "P2", 2),
-        (EmailClassification.priority == "ignore", 3),
-        else_=4,
+        (EmailClassification.category == "revisar", 0),
+        (EmailClassification.priority == "P0", 1),
+        (EmailClassification.priority == "P1", 2),
+        (EmailClassification.priority == "P2", 3),
+        (EmailClassification.priority == "ignore", 4),
+        else_=5,
     )
     statement = statement.order_by(None)
     if sort == "oldest":
@@ -114,7 +115,12 @@ def _candidate_payload(
         "cleanup_candidate": bool(
             classification and classification.cleanup_candidate
         ),
+        "cleanup_action": getattr(classification, "cleanup_action", "none")
+        if classification else "none",
         "cleanup_reason": classification.cleanup_reason if classification else None,
+        "needs_human_review": bool(
+            classification and classification.category == "revisar"
+        ),
         "confidence": classification.confidence if classification else None,
     }
 
@@ -123,7 +129,7 @@ def _candidate_payload(
 def list_cleanup_messages(
     page: int = Query(1, ge=1),
     page_size: int = Query(40, ge=1, le=100),
-    mode: Literal["candidates", "all"] = "candidates",
+    mode: Literal["archive", "trash", "all"] = "archive",
     query: str | None = Query(None, max_length=300),
     account: str | None = Query(None, max_length=320),
     category: str | None = Query(None, max_length=40),
@@ -177,6 +183,7 @@ def list_cleanup_messages(
 
 @router.get("/selection")
 def select_cleanup_suggestions(
+    mode: Literal["archive", "trash"] = "archive",
     query: str | None = Query(None, max_length=300),
     account: str | None = Query(None, max_length=320),
     category: str | None = Query(None, max_length=40),
@@ -190,7 +197,7 @@ def select_cleanup_suggestions(
         raise HTTPException(status_code=400, detail="A data inicial não pode vir após a final.")
     statement = _message_statement(
         page_size=200,
-        mode="candidates",
+        mode=mode,
         query=query,
         account=account,
         category=category,
@@ -264,6 +271,7 @@ def add_message_to_blacklist(email_agent_id: str, request: BlacklistRequest) -> 
         classification = max(msg.classifications, key=lambda item: item.id) if msg.classifications else None
         if classification:
             classification.cleanup_candidate = True
+            classification.cleanup_action = "trash"
             classification.cleanup_reason = f"Blacklist explícita de {request.target}: {value}."
     return {"status": "created", "target": request.target, "value": value}
 

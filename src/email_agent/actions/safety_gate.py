@@ -45,7 +45,10 @@ def plan_safe_actions(state: dict[str, Any]) -> dict[str, Any]:
                     message_id=msg.id,
                     review_type="classification_uncertain",
                     prompt_text=state.get("human_review_reason"),
-                    proposed_action_json={"suggested_labels": suggested},
+                    proposed_action_json={
+                        "suggested_labels": suggested,
+                        "cleanup_action": state.get("cleanup_action", "none"),
+                    },
                 )
             )
 

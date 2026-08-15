@@ -77,6 +77,8 @@ class EmailMessage(TimestampMixin, Base):
     provider_message_id: Mapped[str] = mapped_column(String(255))
     provider_thread_id: Mapped[str | None] = mapped_column(String(255))
     message_id_header: Mapped[str | None] = mapped_column(String(998))
+    in_reply_to_header: Mapped[str | None] = mapped_column(String(998))
+    references_json: Mapped[list | None] = mapped_column(JSON)
     mailbox: Mapped[str] = mapped_column(String(255))
     from_email: Mapped[str | None] = mapped_column(String(320), index=True)
     from_name: Mapped[str | None] = mapped_column(String(200))
@@ -136,6 +138,7 @@ class EmailClassification(Base):
     category: Mapped[str | None] = mapped_column(String(40), index=True)
     action_required: Mapped[bool] = mapped_column(Boolean, default=False)
     cleanup_candidate: Mapped[bool] = mapped_column(Boolean, default=False)
+    cleanup_action: Mapped[str] = mapped_column(String(20), default="none")
     cleanup_reason: Mapped[str | None] = mapped_column(Text)
     deadline: Mapped[date | None] = mapped_column(Date)
     digest_summary: Mapped[str | None] = mapped_column(Text)
@@ -264,9 +267,10 @@ Index(
     unique=True,
 )
 Index(
-    "ix_email_classification_cleanup_pending",
+    "ix_email_classification_cleanup_action_pending",
+    EmailClassification.cleanup_action,
     EmailClassification.message_id,
-    postgresql_where=text("cleanup_candidate"),
+    postgresql_where=text("cleanup_action <> 'none'"),
 )
 Index(
     "ix_email_classification_priority_score",

@@ -9,6 +9,23 @@ from email_agent.models import EmailAttachment, EmailMessage, EmailUserEvent
 from email_agent.parsing.mime_parser import ParsedEmail
 
 
+def _imap_thread_id(
+    parsed: ParsedEmail,
+    session: Session | None = None,
+    account_id: int | None = None,
+) -> str | None:
+    """Deriva uma thread estável pelo primeiro ancestral RFC 5322 disponível."""
+    if session is not None and account_id is not None and parsed.in_reply_to_header:
+        parent = find_by_header(session, account_id, parsed.in_reply_to_header)
+        if parent and parent.provider_thread_id:
+            return parent.provider_thread_id
+    root = next(
+        (value for value in parsed.references if value),
+        parsed.in_reply_to_header or parsed.message_id_header,
+    )
+    return f"imap:{root}"[:255] if root else None
+
+
 def find_existing(
     session: Session, account_id: int, provider_message_id: str, mailbox: str
 ) -> EmailMessage | None:
@@ -34,6 +51,25 @@ def find_by_header(session: Session, account_id: int, message_id_header: str | N
     ).scalar_one_or_none()
 
 
+def _update_thread_metadata(
+    session: Session,
+    message: EmailMessage,
+    *,
+    provider: str,
+    provider_thread_id: str | None,
+    parsed: ParsedEmail,
+) -> None:
+    """Enriquece mensagens deduplicadas com metadados de thread recém-coletados."""
+    message.in_reply_to_header = parsed.in_reply_to_header
+    message.references_json = parsed.references
+    if provider_thread_id:
+        message.provider_thread_id = provider_thread_id
+    elif provider == "imap" and not message.provider_thread_id:
+        message.provider_thread_id = _imap_thread_id(
+            parsed, session, message.account_id
+        )
+
+
 def persist_message(
     session: Session,
     *,
@@ -56,6 +92,13 @@ def persist_message(
     """
     existing = find_existing(session, account_id, provider_message_id, mailbox)
     if existing:
+        _update_thread_metadata(
+            session,
+            existing,
+            provider=provider,
+            provider_thread_id=provider_thread_id,
+            parsed=parsed,
+        )
         if raw_labels is not None and set(existing.raw_labels or []) != set(raw_labels):
             session.add(
                 EmailUserEvent(
@@ -71,6 +114,13 @@ def persist_message(
 
     moved = find_by_header(session, account_id, parsed.message_id_header)
     if moved is not None:
+        _update_thread_metadata(
+            session,
+            moved,
+            provider=provider,
+            provider_thread_id=provider_thread_id,
+            parsed=parsed,
+        )
         prev_role = (moved.raw_labels or [None])[0]
         event_type = "moved_to_folder"
         if role == "spam":
@@ -94,12 +144,17 @@ def persist_message(
             moved.raw_labels = raw_labels
         return moved, False
 
+    if provider == "imap" and not provider_thread_id:
+        provider_thread_id = _imap_thread_id(parsed, session, account_id)
+
     msg = EmailMessage(
         email_agent_id=generate_email_agent_id(session, datetime.now(UTC)),
         account_id=account_id,
         provider_message_id=provider_message_id,
         provider_thread_id=provider_thread_id,
         message_id_header=parsed.message_id_header,
+        in_reply_to_header=parsed.in_reply_to_header,
+        references_json=parsed.references,
         mailbox=mailbox,
         from_email=parsed.from_email,
         from_name=parsed.from_name,

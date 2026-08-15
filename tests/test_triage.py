@@ -15,7 +15,7 @@ def _result(**changes):
         "category": "marketing",
         "priority": "ignore",
         "action_required": False,
-        "cleanup_candidate": True,
+        "cleanup_action": "trash",
         "cleanup_reason": "newsletter promocional",
         "spam_score": 0.1,
         "importance_score": 5,
@@ -30,18 +30,28 @@ def _result(**changes):
 def test_conservative_cleanup_candidate_is_preserved():
     result = _result()
     assert result.cleanup_candidate is True
+    assert result.cleanup_action == "trash"
     assert result.category == "marketing"
 
 
-def test_relevant_category_can_never_be_preselected_for_cleanup():
-    result = _result(category="documento_fiscal", cleanup_candidate=True)
+def test_relevant_category_can_never_be_preselected_for_trash():
+    result = _result(category="documento_fiscal", cleanup_action="trash")
     assert result.cleanup_candidate is False
+    assert result.cleanup_action == "none"
+
+
+def test_resolved_document_can_be_preselected_for_archive():
+    result = _result(category="documento_fiscal", cleanup_action="archive")
+    assert result.cleanup_candidate is True
+    assert result.cleanup_action == "archive"
 
 
 def test_low_confidence_never_preselects_cleanup():
-    result = _result(confidence=0.2, cleanup_candidate=True)
+    result = _result(confidence=0.2, cleanup_action="trash")
     assert result.needs_human_review is True
     assert result.cleanup_candidate is False
+    assert result.category == "revisar"
+    assert result.cleanup_action == "none"
 
 
 def test_invalid_llm_response_fails_to_review():
@@ -54,16 +64,18 @@ def test_invalid_llm_response_fails_to_review():
 def test_triage_carries_llm_audit_metadata(monkeypatch):
     payload = {
         "category": "marketing", "priority": "P2", "confidence": 0.9,
-        "cleanup_candidate": True, "summary": "Oferta", "reason": "Marketing",
+        "cleanup_action": "trash", "summary": "Oferta", "reason": "Marketing",
     }
-    monkeypatch.setattr(
-        triage,
-        "generate_json",
-        lambda *a, **k: LLMCallResult(
+    captured = {}
+
+    def fake_generate(prompt, *args, **kwargs):
+        captured["prompt"] = prompt
+        return LLMCallResult(
             payload, "openai_compatible", "modelo-x", raw_response='{"category":"marketing"}',
             input_tokens=100, output_tokens=20, latency_ms=321,
-        ),
-    )
+        )
+
+    monkeypatch.setattr(triage, "generate_json", fake_generate)
     monkeypatch.setattr(
         triage,
         "get_settings",
@@ -73,12 +85,18 @@ def test_triage_carries_llm_audit_metadata(monkeypatch):
         account_email="conta@example.com", mailbox="INBOX", from_email="loja@example.com",
         from_name="Loja", subject="Oferta", body="Promoção", attachments=[],
         in_provider_spam=False, is_sent_by_user=False,
+        message_date="2026-01-10T10:00:00+00:00",
+        current_date="2026-08-13T10:00:00+00:00",
+        thread_context="Histórico cronológico:\n- resposta conhecida",
     )
     assert result.llm_provider == "openai_compatible"
     assert result.llm_model == "modelo-x"
     assert result.llm_raw_result == payload
     assert result.llm_input_tokens == 100
     assert result.llm_latency_ms == 321
+    assert "Data atual: 2026-08-13" in captured["prompt"]
+    assert "Data da mensagem avaliada: 2026-01-10" in captured["prompt"]
+    assert "resposta conhecida" in captured["prompt"]
 
 
 def test_spam_blacklist_matches_sender_and_domain_without_content_evaluation():
@@ -114,4 +132,10 @@ def test_spam_blacklist_becomes_cleanup_suggestion_without_calling_llm(monkeypat
     })
 
     assert result["cleanup_candidate"] is True
+    assert result["cleanup_action"] == "trash"
     assert "blacklist" in result["cleanup_reason"].lower()
+
+
+def test_priority_or_required_action_cannot_be_cleanup_suggestion():
+    assert _result(priority="P0", cleanup_action="archive").cleanup_action == "none"
+    assert _result(action_required=True, cleanup_action="trash").cleanup_action == "none"

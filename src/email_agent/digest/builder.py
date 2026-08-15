@@ -147,7 +147,7 @@ def _cleanup_candidates(session, *, age_cutoff: datetime) -> list[tuple]:
     rows = session.execute(
         select(EmailMessage, EmailClassification)
         .join(EmailClassification, EmailClassification.message_id == EmailMessage.id)
-        .where(EmailClassification.cleanup_candidate.is_(True))
+        .where(EmailClassification.cleanup_action == "trash")
         .where(EmailMessage.date.is_not(None), EmailMessage.date < age_cutoff)
         .where(~EmailMessage.mailbox.ilike("%trash%"), ~EmailMessage.mailbox.ilike("%lixeira%"))
         .order_by(EmailMessage.date.asc())  # mais antigos primeiro

@@ -1,8 +1,8 @@
 const state = {
-  page: 1, mode: "candidates", query: "", account: "", category: "", priority: "",
+  page: 1, mode: "all", query: "", account: "", category: "", priority: "",
   datePreset: "", dateFrom: "", dateTo: "", sort: "newest", hasMore: false, loading: false,
   selected: new Set(), items: new Map(), activeId: null, contextId: null,
-  pendingAction: null, lastSelectedId: null, lastRenderedGroup: null,
+  pendingAction: null, pendingIds: [], lastSelectedId: null, lastRenderedGroup: null,
 };
 const MAX_SELECTION = 200;
 const $ = (selector) => document.querySelector(selector);
@@ -21,6 +21,7 @@ const els = {
   readerCleanup: $("#reader-cleanup"), readerBody: $("#reader-body"), contextMenu: $("#context-menu"),
   modal: $("#confirm-modal"), modalTitle: $("#modal-title"), modalCopy: $("#modal-copy"),
   modalConfirm: $("#modal-confirm"), toast: $("#toast"), theme: $("#theme-toggle"),
+  listTitle: $("#list-title-label"),
 };
 
 const categoryLabels = {
@@ -51,10 +52,11 @@ function cardTemplate(item) {
   const checked = state.selected.has(item.id);
   const sender = item.from_name || item.from_email || "Remetente desconhecido";
   const category = categoryLabels[item.category] || item.category || "Sem categoria";
-  const suggestion = item.cleanup_candidate
-    ? `<span class="suggestion-chip" title="${escapeHtml(item.cleanup_reason || "Sugestão de limpeza da IA")}">Limpeza sugerida</span>` : "";
+  const suggestionLabels = { archive: "Arquivar", trash: "Lixeira" };
+  const suggestion = item.cleanup_action && item.cleanup_action !== "none"
+    ? `<span class="suggestion-chip suggestion-${escapeHtml(item.cleanup_action)}" title="${escapeHtml(item.cleanup_reason || "Sugestão da IA")}">${suggestionLabels[item.cleanup_action] || "Limpeza"}</span>` : "";
   const priority = item.priority ? `<span>${escapeHtml(priorityLabels[item.priority] || item.priority)}</span>` : "";
-  return `<article class="message-card" tabindex="0" data-card-id="${escapeHtml(item.id)}"
+  return `<article class="message-card" tabindex="0" data-card-id="${escapeHtml(item.id)}" data-cleanup-action="${escapeHtml(item.cleanup_action || "none")}"
       data-selected="${checked}" data-active="${state.activeId === item.id}">
     <label class="check-wrap" title="Selecionar para ação em lote">
       <input class="message-checkbox" type="checkbox" data-id="${escapeHtml(item.id)}" ${checked ? "checked" : ""} />
@@ -71,6 +73,9 @@ function cardTemplate(item) {
 
 function itemGroup(item) {
   if (state.sort === "priority") {
+    if (item.needs_human_review || item.category === "revisar") {
+      return { key: "priority-review", label: "Revisão" };
+    }
     const priority = item.priority || "none";
     return {
       key: `priority-${priority}`,
@@ -139,11 +144,21 @@ function selectRange(id, selected) {
 }
 
 function updateModeTabs() {
+  const modeLabels = {
+    archive: "Sugestões para arquivar",
+    trash: "Sugestões para a Lixeira",
+    all: "Inbox completa",
+  };
+  document.documentElement.dataset.mode = state.mode;
+  els.listTitle.textContent = modeLabels[state.mode];
   document.querySelectorAll(".mode-tab").forEach((tab) => {
     const active = tab.dataset.mode === state.mode;
     tab.classList.toggle("is-active", active);
-    tab.setAttribute("aria-pressed", String(active));
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
   });
+  document.querySelector('[data-action="archive"]').classList.toggle("hidden", state.mode === "trash");
+  document.querySelector('[data-action="trash"]').classList.toggle("hidden", state.mode === "archive");
 }
 
 function populateAccounts(accounts) {
@@ -277,8 +292,9 @@ async function openMessage(id) {
     els.readerDate.textContent = formatDate(item.date);
     const tags = [categoryLabels[item.category] || item.category, priorityLabels[item.priority] || item.priority, item.has_attachment ? "Anexo" : null].filter(Boolean);
     els.readerTags.innerHTML = tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("");
-    if (item.cleanup_candidate) {
-      els.readerCleanup.textContent = `Sugestão de limpeza: ${item.cleanup_reason || "mensagem sem valor futuro identificada pela triagem."}`;
+    if (item.cleanup_action && item.cleanup_action !== "none") {
+      const destination = item.cleanup_action === "archive" ? "Arquivar" : "Mover à Lixeira";
+      els.readerCleanup.textContent = `Sugestão — ${destination}: ${item.cleanup_reason || "mensagem identificada pela triagem."}`;
       els.readerCleanup.classList.remove("hidden");
     }
     renderEmailBody(item.body);
@@ -289,7 +305,7 @@ function hideContextMenu() { els.contextMenu.classList.add("hidden"); state.cont
 
 function showContextMenu(event, id) {
   event.preventDefault(); state.contextId = id; els.contextMenu.classList.remove("hidden");
-  const menuWidth = 220, menuHeight = 112;
+  const menuWidth = 220, menuHeight = 205;
   els.contextMenu.style.left = `${Math.min(event.clientX, window.innerWidth - menuWidth - 8)}px`;
   els.contextMenu.style.top = `${Math.min(event.clientY, window.innerHeight - menuHeight - 8)}px`;
 }
@@ -305,7 +321,7 @@ async function addToBlacklist(target) {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || "Não foi possível criar a blacklist.");
     const item = state.items.get(id);
-    if (item) { item.cleanup_candidate = true; item.cleanup_reason = `Blacklist explícita de ${target}: ${payload.value}.`; }
+    if (item) { item.cleanup_candidate = true; item.cleanup_action = "trash"; item.cleanup_reason = `Blacklist explícita de ${target}: ${payload.value}.`; }
     showToast(`${target === "sender" ? "Remetente" : "Domínio"} ${payload.value} adicionado à blacklist e às sugestões de limpeza.`, "success");
   } catch (error) { showToast(error.message, "error"); }
 }
@@ -330,7 +346,15 @@ els.list.addEventListener("contextmenu", (event) => {
 });
 
 els.contextMenu.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-blacklist]"); if (button) addToBlacklist(button.dataset.blacklist);
+  const actionButton = event.target.closest("[data-context-action]");
+  if (actionButton) {
+    const id = state.contextId;
+    hideContextMenu();
+    if (id) openConfirmation(actionButton.dataset.contextAction, [id]);
+    return;
+  }
+  const blacklistButton = event.target.closest("[data-blacklist]");
+  if (blacklistButton) addToBlacklist(blacklistButton.dataset.blacklist);
 });
 document.addEventListener("click", (event) => {
   if (!event.target.closest("#context-menu")) hideContextMenu();
@@ -407,6 +431,14 @@ $("#mode-tabs").addEventListener("click", (event) => {
   const tab = event.target.closest("[data-mode]"); if (!tab || tab.dataset.mode === state.mode) return;
   state.mode = tab.dataset.mode; updateModeTabs(); resetAndLoad();
 });
+$("#mode-tabs").addEventListener("keydown", (event) => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = [...document.querySelectorAll(".mode-tab")];
+  const currentIndex = tabs.findIndex((tab) => tab.dataset.mode === state.mode);
+  const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+    : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  event.preventDefault(); tabs[nextIndex].click(); tabs[nextIndex].focus();
+});
 els.selectAll.addEventListener("change", () => {
   const cards = [...els.list.querySelectorAll("[data-card-id]")];
   const select = els.selectAll.checked;
@@ -424,25 +456,27 @@ new IntersectionObserver(([entry]) => {
   if (entry.isIntersecting && state.hasMore && !state.loading) loadMessages();
 }, { root: els.results, rootMargin: "300px" }).observe(els.sentinel);
 
-document.querySelectorAll(".bulk-trigger").forEach((button) => button.addEventListener("click", () => openConfirmation(button.dataset.action)));
-function openConfirmation(action) {
-  state.pendingAction = action; const count = state.selected.size; const trash = action === "trash";
+document.querySelectorAll(".bulk-trigger").forEach((button) => button.addEventListener("click", () => openConfirmation(button.dataset.action, [...state.selected])));
+function openConfirmation(action, ids) {
+  state.pendingAction = action; state.pendingIds = ids; const count = ids.length; const trash = action === "trash";
   els.modalTitle.textContent = trash ? "Mover para a Lixeira?" : "Arquivar mensagens?";
   els.modalCopy.textContent = trash ? `${count} mensagem(ns) serão movidas para a Lixeira recuperável.` : `${count} mensagem(ns) sairão da Inbox e irão para o arquivo nativo.`;
   els.modalConfirm.textContent = trash ? "Mover à Lixeira" : "Arquivar";
   els.modalConfirm.classList.toggle("danger", trash); els.modal.classList.remove("hidden"); els.modalConfirm.focus();
 }
-function closeConfirmation() { state.pendingAction = null; els.modal.classList.add("hidden"); }
+function closeConfirmation() { state.pendingAction = null; state.pendingIds = []; els.modal.classList.add("hidden"); }
 $("#modal-cancel").addEventListener("click", closeConfirmation);
 els.modal.addEventListener("click", (event) => { if (event.target === els.modal) closeConfirmation(); });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") { closeConfirmation(); hideContextMenu(); closePopover("filter"); closePopover("sort"); }
 });
 els.modalConfirm.addEventListener("click", async () => {
-  if (!state.pendingAction || !state.selected.size) return;
+  if (!state.pendingAction || !state.pendingIds.length) return;
   els.modalConfirm.disabled = true;
   try {
-    const response = await fetch("/api/cleanup/bulk-action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: state.pendingAction, ids: [...state.selected], confirmed: true }) });
+    const action = state.pendingAction;
+    const ids = [...state.pendingIds];
+    const response = await fetch("/api/cleanup/bulk-action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ids, confirmed: true }) });
     const payload = await response.json(); if (!response.ok) throw new Error(payload.detail || "A ação falhou.");
     closeConfirmation();
     showToast(

@@ -12,6 +12,7 @@ from email_agent.intelligence.rule_agent import (
     match_spam_rule,
 )
 from email_agent.intelligence.state import EmailAgentState
+from email_agent.intelligence.thread_context import build_thread_context
 from email_agent.intelligence.triage import TRIAGE_PROMPT_VERSION, triage_email
 from email_agent.models import EmailAccount, EmailClassification, EmailMessage, db_session
 
@@ -22,6 +23,7 @@ def load_email(state: EmailAgentState) -> EmailAgentState:
         if msg is None:
             return {"errors": ["mensagem não encontrada no banco"]}
         account = session.get(EmailAccount, msg.account_id)
+        thread = build_thread_context(session, msg)
         return {
             "account_id": msg.account_id,
             "account_email": account.email_address if account else "",
@@ -32,6 +34,9 @@ def load_email(state: EmailAgentState) -> EmailAgentState:
             "from_email": msg.from_email or "",
             "from_name": msg.from_name or "",
             "subject": msg.subject or "",
+            "date": thread.message_date,
+            "current_date": thread.current_date,
+            "thread_context": thread.history,
             "normalized_text": msg.normalized_text or "",
             "is_sent_by_user": msg.is_sent_by_user,
             "current_provider_labels": msg.raw_labels or [],
@@ -65,6 +70,7 @@ def classify_message(state: EmailAgentState) -> EmailAgentState:
                 "confidence": 1.0,
                 "action_required": False,
                 "cleanup_candidate": True,
+                "cleanup_action": "trash",
                 "cleanup_reason": "Remetente ou domínio presente na blacklist explícita.",
                 "digest_summary": "Remetente ou domínio marcado como spam suspeito.",
                 "suggested_labels": labels,
@@ -87,6 +93,9 @@ def classify_message(state: EmailAgentState) -> EmailAgentState:
         attachments=attachments,
         in_provider_spam=in_spam,
         is_sent_by_user=state.get("is_sent_by_user", False),
+        message_date=state.get("date", "desconhecida"),
+        current_date=state.get("current_date", "desconhecida"),
+        thread_context=state.get("thread_context", "Histórico indisponível."),
     )
     return {
         "spam_score": result.spam_score,
@@ -98,6 +107,7 @@ def classify_message(state: EmailAgentState) -> EmailAgentState:
         "confidence": result.confidence,
         "action_required": result.action_required,
         "cleanup_candidate": result.cleanup_candidate,
+        "cleanup_action": result.cleanup_action,
         "cleanup_reason": result.cleanup_reason,
         "digest_summary": result.summary,
         # A classificação é local. Só regras explícitas do usuário podem sugerir
@@ -134,7 +144,10 @@ def detect_followup(state: EmailAgentState) -> EmailAgentState:
         "priority": "P1",
         "action_required": True,
         "cleanup_candidate": False,
+        "cleanup_action": "none",
         "cleanup_reason": "",
+        "needs_human_review": False,
+        "human_review_reason": None,
     }
 
 
@@ -182,8 +195,12 @@ def apply_rules(state: EmailAgentState) -> EmailAgentState:
             filter(None, [state.get("importance_reason", ""), *reasons])
         ),
     }
-    if new_category:
+    if new_category and not state.get("needs_human_review"):
         result["category"] = new_category
+    if best_priority in {"P0", "P1"}:
+        result["cleanup_candidate"] = False
+        result["cleanup_action"] = "none"
+        result["cleanup_reason"] = ""
     return result
 
 
@@ -202,6 +219,7 @@ def persist_result(state: EmailAgentState) -> EmailAgentState:
                 category=state.get("category"),
                 action_required=state.get("action_required", False),
                 cleanup_candidate=state.get("cleanup_candidate", False),
+                cleanup_action=state.get("cleanup_action", "none"),
                 cleanup_reason=state.get("cleanup_reason"),
                 digest_summary=state.get("digest_summary"),
                 suggested_labels=state.get("suggested_labels"),

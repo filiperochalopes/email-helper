@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from threading import Lock
 from time import sleep
 from types import SimpleNamespace
@@ -40,3 +41,12 @@ def test_classify_many_counts_individual_failures(monkeypatch):
     )
 
     assert service._classify_many([1, 2, 3]) == (2, 1)
+
+
+def test_reclassify_all_includes_already_classified_messages(monkeypatch):
+    result = SimpleNamespace(scalars=lambda: [9, 8, 7])
+    session = SimpleNamespace(execute=lambda _statement: result)
+    monkeypatch.setattr(service, "db_session", lambda: nullcontext(session))
+    monkeypatch.setattr(service, "_classify_many", lambda ids: (len(ids), 0))
+
+    assert service.reclassify_all(limit=3) == {"classified": 3, "errors": 0}

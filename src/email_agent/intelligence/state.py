@@ -16,6 +16,8 @@ class EmailAgentState(TypedDict, total=False):
     cc: list[str]
     subject: str
     date: str
+    current_date: str
+    thread_context: str
     message_id_header: str | None
     normalized_text: str
     attachments: list[dict[str, Any]]
@@ -43,6 +45,7 @@ class EmailAgentState(TypedDict, total=False):
     llm_error: str | None
     action_required: bool
     cleanup_candidate: bool
+    cleanup_action: Literal["none", "archive", "trash"]
     cleanup_reason: str | None
     is_followup_waiting_response: bool
     followup_reason: str | None

@@ -37,7 +37,7 @@ tarefa abre sua própria sessão de banco; o valor mínimo efetivo é 1.
 A leitura principal de cada e-mail é armazenada em `email_classification`:
 
 - categoria, prioridade, confiança, resumo e motivo;
-- `cleanup_candidate` e justificativa;
+- `cleanup_action` (`none`, `archive` ou `trash`) e justificativa;
 - `llm_provider`, `llm_model` e `llm_prompt_version`;
 - `llm_raw_result` e `llm_raw_response`;
 - `llm_input_tokens`, `llm_output_tokens`, `llm_latency_ms` e `llm_error`.
@@ -48,5 +48,6 @@ traces e é opt-in; quando ativo, recebe prompts e respostas.
 ## Privacidade
 
 Ollama local mantém a inferência na máquina. Um provider
-`openai_compatible` externo recebe o trecho de corpo incluído no prompt.
+`openai_compatible` externo recebe o trecho de corpo e o histórico recente da
+thread incluídos no prompt.
 `MAX_EMAIL_TEXT_CHARS` limita esse trecho, mas não o anonimiza.

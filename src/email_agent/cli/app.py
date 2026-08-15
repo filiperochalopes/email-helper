@@ -457,10 +457,23 @@ def sync_once(
 
 
 @relabel_app.command("all")
-def relabel_all():
-    from email_agent.sync.service import classify_pending
+def relabel_all(
+    force: bool = typer.Option(
+        False, "--force", help="Reclassifica também mensagens que já têm classificação."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Não pedir confirmação com --force."),
+    limit: int = typer.Option(2000, "--limit", min=1, max=10000),
+):
+    from email_agent.sync.service import classify_pending, reclassify_all
 
-    console.print(classify_pending())
+    if not force:
+        console.print(classify_pending(limit=limit))
+        return
+    if not yes and not typer.confirm(
+        f"Reclassificar até {limit} mensagens com o prompt atual?", default=False
+    ):
+        raise typer.Exit()
+    console.print(reclassify_all(limit=limit))
 
 
 @relabel_app.command("message")
@@ -469,7 +482,10 @@ def relabel_message(id: str = typer.Option(..., "--id")):
     from email_agent.intelligence.graph import run_pipeline
 
     state = run_pipeline(msg.id)
-    console.print({k: state.get(k) for k in ("category", "priority", "suggested_labels")})
+    console.print({
+        k: state.get(k)
+        for k in ("category", "priority", "cleanup_action", "suggested_labels")
+    })
 
 
 # ---------- rules ----------
