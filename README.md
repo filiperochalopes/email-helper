@@ -137,7 +137,95 @@ docker compose exec email-helper-app agent show E-YYYYMMDD-NNNNNN
 ```
 
 O agendamento permanece externo ao aplicativo. Durante desenvolvimento, execute
-`run` manualmente.
+`run` manualmente. Em uma instalação contínua, agende `agent sync all`: esse
+comando sincroniza todas as contas ativas e classifica cada mensagem nova, mas
+não gera nem envia o digest. O Docker Desktop/Engine e a stack precisam estar
+ativos; `docker compose up -d` não instala o agendamento.
+
+### Agendamento a cada 5 minutos
+
+A opção `-T` evita que o agendador tente abrir um terminal interativo. No macOS,
+o instalador abaixo resolve todos os caminhos automaticamente. Nos exemplos
+manuais de Linux e Windows, substitua os caminhos indicados; no Linux, descubra
+o executável do Docker com `command -v docker`.
+
+#### macOS (`launchd`)
+
+Com o Docker Desktop iniciado, execute na raiz do projeto:
+
+```bash
+sh scripts/install-macos-scheduler.sh
+```
+
+O instalador detecta automaticamente os caminhos absolutos do projeto, do
+Docker e do usuário. Em seguida, cria e valida
+`~/Library/LaunchAgents/br.com.email-helper.sync.plist`, ativa o `LaunchAgent` e
+dispara o primeiro sync. A saída fica em
+`~/Library/Logs/email-helper-sync.log` e os erros em
+`~/Library/Logs/email-helper-sync-error.log`.
+
+Para desinstalar:
+
+```bash
+sh scripts/install-macos-scheduler.sh --uninstall
+```
+
+#### Linux (`systemd` do usuário)
+
+Crie `~/.config/systemd/user/email-helper-sync.service`:
+
+```ini
+[Unit]
+Description=Sincroniza e classifica e-mails do email-helper
+
+[Service]
+Type=oneshot
+WorkingDirectory=/CAMINHO/ABSOLUTO/email-helper
+ExecStart=/CAMINHO/DO/docker compose exec -T email-helper-app agent sync all
+```
+
+Crie `~/.config/systemd/user/email-helper-sync.timer`:
+
+```ini
+[Unit]
+Description=Executa o sync do email-helper a cada 5 minutos
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Ative e confira o timer:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now email-helper-sync.timer
+systemctl --user list-timers email-helper-sync.timer
+journalctl --user -u email-helper-sync.service
+```
+
+#### Windows (Agendador de Tarefas)
+
+Em um PowerShell, substitua o caminho do projeto e crie a tarefa:
+
+```powershell
+schtasks.exe /Create /F /TN "email-helper sync" /SC MINUTE /MO 5 /TR 'cmd.exe /d /c "cd /d C:\CAMINHO\email-helper && docker compose exec -T email-helper-app agent sync all"'
+schtasks.exe /Run /TN "email-helper sync"
+```
+
+Para remover a tarefa:
+
+```powershell
+schtasks.exe /Delete /F /TN "email-helper sync"
+```
+
+Nos três sistemas, valide primeiro o comando manualmente. Se a execução ocorrer
+enquanto o computador estiver suspenso ou o Docker estiver parado, ela falhará
+sem alterar mensagens no provedor e o ciclo seguinte tentará novamente.
 
 ## Triagem e limpeza
 
