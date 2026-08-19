@@ -1,11 +1,16 @@
+x-app-env: &app-env
+  DATABASE_URL: postgresql+psycopg://emailagent:emailagent@email-helper-db:5432/emailagent
+  ACCOUNTS_FILE: /secrets/accounts.yml
+  GMAIL_OAUTH_CLIENT_SECRET_FILE: /secrets/gmail_client_secret.json
+  GMAIL_TOKEN_STORAGE_PATH: /secrets/gmail_tokens
+
 x-app-common: &app-common
   build: .
+  # Tag explícita e compartilhada: sem ela cada serviço deriva um nome próprio
+  # e `docker compose run` reconstrói a imagem inteira em vez de reusar a do app.
+  image: email-helper-app:local
   env_file: .env
-  environment:
-    DATABASE_URL: postgresql+psycopg://emailagent:emailagent@email-helper-db:5432/emailagent
-    ACCOUNTS_FILE: /secrets/accounts.yml
-    GMAIL_OAUTH_CLIENT_SECRET_FILE: /secrets/gmail_client_secret.json
-    GMAIL_TOKEN_STORAGE_PATH: /secrets/gmail_tokens
+  environment: *app-env
   restart: unless-stopped
   volumes:
     - ./src:/app/src
@@ -26,6 +31,26 @@ services:
     <<: *app-common
     ports:
       - "127.0.0.1:8010:8000"
+
+  # Trabalho offline pesado de LLM (cartão de estilo, futura otimização DSPy).
+  # `profiles` mantém o serviço fora do `docker compose up`; ele sobe só em
+  # `docker compose run --rm email-helper-compose <comando>`, que habilita o
+  # profile sozinho. Aponta para o modelo forte no LM Studio do host, enquanto a
+  # triagem segue no modelo pequeno do Ollama.
+  email-helper-compose:
+    <<: *app-common
+    profiles: ["compose"]
+    restart: "no"
+    environment:
+      <<: *app-env
+      LLM_PROVIDER: openai_compatible
+      LLM_BASE_URL: http://host.docker.internal:1234
+      LLM_MODEL: google/gemma-4-26b-a4b-qat
+      # LM Studio recusa `json_object`; ver LLM_JSON_MODE em config.py.
+      LLM_JSON_MODE: "off"
+      LLM_MAX_CONCURRENCY: "2"
+    entrypoint: ["agent"]
+    command: ["--help"]
 
   email-helper-db:
     image: postgres:16

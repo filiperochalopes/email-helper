@@ -1,5 +1,6 @@
 """CLI administrativa do email-helper (Typer + Rich)."""
 from datetime import UTC
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -25,11 +26,13 @@ relabel_app = typer.Typer(help="Relabel/bootstrap")
 accounts_app = typer.Typer(help="Contas")
 gmail_app = typer.Typer(help="Gmail OAuth")
 rules_app = typer.Typer(help="Regras de importância (LLM)")
+corpus_app = typer.Typer(help="Catálogo de respostas (composição)")
 app.add_typer(sync_app, name="sync")
 app.add_typer(relabel_app, name="relabel")
 app.add_typer(accounts_app, name="accounts")
 app.add_typer(gmail_app, name="gmail")
 app.add_typer(rules_app, name="rules")
+app.add_typer(corpus_app, name="corpus")
 
 
 @app.callback()
@@ -454,6 +457,165 @@ def sync_once(
     except Exception as exc:
         console.print(f"[red]Falha ao sincronizar {account}:[/red] {exc}")
         raise typer.Exit(1) from exc
+
+
+@sync_app.command("sent")
+def sync_sent(
+    account: str = typer.Option(None, "--account", help="Só esta conta; padrão: todas."),
+    since_days: int = typer.Option(
+        None, "--since-days", min=1, help="Janela em dias; padrão: caixa de envio inteira."
+    ),
+    limit: int = typer.Option(None, "--limit", min=1, help="Máximo de mensagens novas por conta."),
+    classify: bool = typer.Option(
+        False, "--classify/--no-classify",
+        help="Triagem por LLM das novas. Padrão: não classifica.",
+    ),
+):
+    """Varre as pastas de envio (todas as variantes, no IMAP) e persiste as mensagens.
+
+    Carga do catálogo de respostas: ignora o cursor incremental para alcançar
+    mensagens antigas, não classifica por padrão e nunca escreve no provedor.
+    """
+    from email_agent.sync.service import sync_sent_account, sync_sent_all_accounts
+
+    if account:
+        account_id, provider = _account_by_email(account)
+        result = {
+            account: sync_sent_account(
+                account_id, provider, since_days=since_days, limit=limit, classify=classify
+            )
+        }
+    else:
+        result = sync_sent_all_accounts(
+            since_days=since_days, limit=limit, classify=classify
+        )
+    console.print(result)
+
+
+def _account_by_email(email: str) -> tuple[int, str]:
+    with db_session() as session:
+        acc = session.execute(
+            select(EmailAccount).where(EmailAccount.email_address == email)
+        ).scalar_one_or_none()
+        if acc is None:
+            console.print(f"[red]Conta não cadastrada no banco:[/red] {email}")
+            raise typer.Exit(1)
+        return acc.id, acc.provider
+
+
+@corpus_app.command("stats")
+def corpus_stats(
+    account: str = typer.Option(None, "--account", help="Só esta conta; padrão: todas."),
+    since_days: int = typer.Option(None, "--since-days", min=1),
+):
+    """Mede o catálogo sem gravar nada: quantos pares existem e de onde vieram."""
+    _run_corpus(account=account, since_days=since_days, out=None)
+
+
+@corpus_app.command("build")
+def corpus_build(
+    out: Path = typer.Option(
+        Path("/data/exports/reply_corpus.jsonl"), "--out", help="Destino do JSONL."
+    ),
+    account: str = typer.Option(None, "--account", help="Só esta conta; padrão: todas."),
+    since_days: int = typer.Option(None, "--since-days", min=1),
+):
+    """Monta os pares (recebida → resposta) e exporta um JSONL para treino.
+
+    O arquivo carrega corpo de e-mail; o destino padrão fica em `data/exports/`,
+    ignorado pelo Git.
+    """
+    _run_corpus(account=account, since_days=since_days, out=out)
+
+
+def _run_corpus(*, account: str | None, since_days: int | None, out: Path | None) -> None:
+    from email_agent.corpus import collect_reply_examples, export_jsonl
+
+    account_id = _account_by_email(account)[0] if account else None
+    with db_session() as session:
+        examples, stats = collect_reply_examples(
+            session, account_id=account_id, since_days=since_days
+        )
+
+    t = Table(title="Catálogo de respostas")
+    t.add_column("Métrica")
+    t.add_column("Valor", justify="right")
+    t.add_row("Mensagens enviadas analisadas", str(stats.sent_total))
+    t.add_row("Pares utilizáveis", str(stats.examples))
+    t.add_row("  originados da thread", str(stats.from_thread))
+    t.add_row("  recuperados da citação", str(stats.from_quote))
+    t.add_row("Descartados: resposta vazia", str(stats.skipped_empty_reply))
+    t.add_row("Descartados: sem contexto", str(stats.skipped_no_context))
+    t.add_row("Marcados self_overlap (reenvio/template)", str(stats.self_overlap))
+    t.add_row("Mediana de caracteres da resposta", str(stats.median_reply_chars))
+    t.add_row("Mais antiga", stats.oldest or "—")
+    t.add_row("Mais recente", stats.newest or "—")
+    console.print(t)
+
+    if stats.per_account:
+        per = Table(title="Pares por conta")
+        per.add_column("Conta")
+        per.add_column("Pares", justify="right")
+        for email, total in sorted(stats.per_account.items(), key=lambda kv: -kv[1]):
+            per.add_row(email, str(total))
+        console.print(per)
+
+    if out is not None:
+        written = export_jsonl(examples, out)
+        console.print(f"[green]{written} exemplo(s) gravado(s) em {out}[/green]")
+
+
+@corpus_app.command("style-card")
+def corpus_style_card(
+    out_dir: Path = typer.Option(
+        Path("/data/style"), "--out-dir", help="Destino dos cartões em Markdown."
+    ),
+    account: str = typer.Option(None, "--account", help="Só esta conta; padrão: todas + global."),
+    since_days: int = typer.Option(None, "--since-days", min=1),
+    batch_size: int = typer.Option(25, "--batch-size", min=1, help="Exemplos por chamada."),
+    max_examples: int = typer.Option(
+        200, "--max-examples", min=1, help="Teto por cartão, amostrado no tempo."
+    ),
+):
+    """Destila do catálogo um cartão de estilo por conta, em Markdown editável.
+
+    Trabalho offline e pesado: rode no serviço com profile, que aponta para o
+    modelo forte. Números são medidos em Python; só os traços qualitativos vêm
+    da LLM. Exemplos marcados `self_overlap` ficam fora.
+    """
+    from email_agent.corpus import collect_reply_examples
+    from email_agent.corpus.style_card import build_card, group_examples, write_card
+
+    account_id = _account_by_email(account)[0] if account else None
+    with db_session() as session:
+        examples, _stats = collect_reply_examples(
+            session, account_id=account_id, since_days=since_days
+        )
+
+    groups = group_examples(examples, include_global=account is None)
+    if not groups:
+        console.print(
+            "[red]Sem exemplos suficientes.[/red] Rode antes: agent sync sent && agent corpus stats"
+        )
+        raise typer.Exit(1)
+
+    t = Table(title="Cartões a gerar")
+    t.add_column("Cartão")
+    t.add_column("Exemplos", justify="right")
+    for name, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        t.add_row(name, str(len(items)))
+    console.print(t)
+
+    for name, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        console.print(f"[bold]→[/bold] {name} ({len(items)} exemplos)…")
+        card = build_card(name, items, batch_size=batch_size, max_examples=max_examples)
+        path = write_card(card, out_dir)
+        status = "[green]ok[/green]" if not card.llm_errors else f"[yellow]{len(card.llm_errors)} falha(s)[/yellow]"
+        console.print(f"   {status} → {path}")
+
+    from email_agent.intelligence.llm_client import flush_langfuse
+
+    flush_langfuse()
 
 
 @relabel_app.command("all")

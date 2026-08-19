@@ -28,7 +28,8 @@ const categoryLabels = {
   marketing: "Marketing", promocao: "Promoção", spam_suspeito: "Spam suspeito",
   followup_sem_acao: "Follow-up sem ação", ignorar: "Ignorar", noticia: "Notícia",
   documento: "Documento", documento_fiscal: "Documento fiscal",
-  aguardando_resposta: "Aguardando resposta", importante_p0: "Importante P0",
+  aguardando_minha_resposta: "Aguardando minha resposta",
+  aguardando_resposta_de_terceiro: "Aguardando resposta de terceiro", importante_p0: "Importante P0",
   importante_p1: "Importante P1", revisar: "Revisar",
 };
 const sortLabels = { newest: "Mais recentes", oldest: "Mais antigos", priority: "Prioridade" };

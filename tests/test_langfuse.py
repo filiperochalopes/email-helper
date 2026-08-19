@@ -128,3 +128,48 @@ def test_langfuse_client_registers_flush_atexit(monkeypatch):
     }]
     assert fake_client.flush in registered
     llm_client._langfuse_client.cache_clear()
+
+
+def _openai_capture(monkeypatch, **over):
+    """Captura o payload enviado ao provider OpenAI-compatible."""
+    monkeypatch.setattr(
+        llm_client,
+        "get_settings",
+        lambda: _settings(
+            llm_enabled=True,
+            llm_provider="openai_compatible",
+            llm_base_url="https://llm.example.com",
+            **over,
+        ),
+    )
+    monkeypatch.setattr(llm_client, "_langfuse_client", lambda: None)
+    calls = []
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"ok": true}'}}], "usage": {}}
+
+    monkeypatch.setattr(
+        llm_client.httpx, "post", lambda url, **kw: (calls.append(kw), _Response())[1]
+    )
+    llm_client.generate_json("mensagem")
+    return calls[0]["json"]
+
+
+def test_json_object_is_requested_by_default(monkeypatch):
+    payload = _openai_capture(monkeypatch, llm_json_mode="json_object")
+    assert payload["response_format"] == {"type": "json_object"}
+
+
+def test_json_mode_off_omits_response_format(monkeypatch):
+    """LM Studio devolve 400 para `json_object`; omitir o campo é a saída."""
+    payload = _openai_capture(monkeypatch, llm_json_mode="off")
+    assert "response_format" not in payload
+
+
+def test_json_mode_text_is_passed_through(monkeypatch):
+    payload = _openai_capture(monkeypatch, llm_json_mode="TEXT")
+    assert payload["response_format"] == {"type": "text"}

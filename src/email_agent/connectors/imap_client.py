@@ -68,6 +68,33 @@ def discover_folders(client: IMAPClient) -> dict[str, object]:
     }
 
 
+# Mais restrito que SENT_FOLDER_RE de propósito: aquele casa "sent" no meio de
+# qualquer palavra, o que basta quando se escolhe UMA pasta por flag SPECIAL-USE,
+# mas na varredura faria uma pasta "Presentations" entrar como caixa de envio —
+# e todas as mensagens dela virariam `is_sent_by_user`.
+SENT_FOLDER_STRICT_RE = re.compile(r"(?:^|[./\\])(?:sent|enviad\w*)(?:$|[\s./\\])", re.IGNORECASE)
+
+
+def discover_sent_folders(client: IMAPClient) -> list[str]:
+    """TODAS as pastas de envio, não só a primeira.
+
+    `discover_folders` devolve uma única pasta `sent`, o que basta para o sync
+    incremental. O catálogo de respostas precisa varrer as variantes que
+    convivem na mesma conta (`Sent`, `Sent Items`, `INBOX.Enviados`, arquivos
+    por ano). Pastas `AI.*` e as marcadas como lixo/rascunho ficam de fora.
+    """
+    folders: list[str] = []
+    for flags, _delimiter, name in client.list_folders():
+        if name == "AI" or name.startswith("AI."):
+            continue
+        flat = " ".join(f.decode(errors="replace") if isinstance(f, bytes) else str(f) for f in flags)
+        if any(marker in flat for marker in ("\\Junk", "\\Trash", "\\Drafts")):
+            continue
+        if "\\Sent" in flat or SENT_FOLDER_STRICT_RE.search(name):
+            folders.append(name)
+    return folders
+
+
 def ensure_archive_folder(client: IMAPClient, fallback: str = "Archive") -> str:
     """Retorna o arquivo nativo do servidor/Canary ou cria um fallback único.
 

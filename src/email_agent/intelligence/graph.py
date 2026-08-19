@@ -4,7 +4,10 @@ O nome do módulo é mantido apenas por ser o ponto de entrada do pipeline; não
 mais LangGraph, modelos sklearn ou treinamento noturno.
 """
 from email_agent.actions.safety_gate import plan_safe_actions
-from email_agent.intelligence.followup import detect_followup_waiting_response
+from email_agent.intelligence.followup import (
+    detect_awaiting_my_reply,
+    detect_followup_waiting_response,
+)
 from email_agent.intelligence.rule_agent import (
     evaluate_rules_llm,
     load_rules_for_account,
@@ -128,20 +131,37 @@ def classify_message(state: EmailAgentState) -> EmailAgentState:
 
 
 def detect_followup(state: EmailAgentState) -> EmailAgentState:
+    """Decide quem deve o próximo e-mail, combinando juízo da LLM com fato do banco.
+
+    A LLM diz se a mensagem pede resposta; o banco diz se ela já foi respondida.
+    Antes, só a direção "eu cobrei alguém" era determinística e a outra ficava a
+    critério da LLM, que aplicava o rótulo de forma inconsistente.
+    """
     if state.get("blacklist_matched"):
         return {"is_followup_waiting_response": False}
-    if not state.get("is_sent_by_user"):
-        return {"is_followup_waiting_response": False}
+
     with db_session() as session:
         msg = session.get(EmailMessage, state["db_message_id"])
-        waiting, reason = detect_followup_waiting_response(session, msg)
+        if state.get("is_sent_by_user"):
+            waiting, reason = detect_followup_waiting_response(session, msg)
+            category = "aguardando_resposta_de_terceiro"
+            priority = "P1"
+        else:
+            # Só mensagens que a triagem já considerou acionáveis entram, senão
+            # todo marketing com "?" no fim viraria pendência de resposta.
+            if not (state.get("action_required") or state.get("priority") in {"P0", "P1"}):
+                return {"is_followup_waiting_response": False}
+            waiting, reason = detect_awaiting_my_reply(session, msg)
+            category = "aguardando_minha_resposta"
+            priority = "P0" if state.get("priority") == "P0" else "P1"
+
     if not waiting:
         return {"is_followup_waiting_response": False}
     return {
         "is_followup_waiting_response": True,
         "followup_reason": reason,
-        "category": "aguardando_resposta",
-        "priority": "P1",
+        "category": category,
+        "priority": priority,
         "action_required": True,
         "cleanup_candidate": False,
         "cleanup_action": "none",

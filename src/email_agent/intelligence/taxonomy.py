@@ -52,7 +52,9 @@ CATEGORIES = [
     "marketing",
     "noticia",       # newsletter/conteúdo informativo (nova série, artigo, novidade)
     "promocao",      # desconto, cupom, oferta, carrinho abandonado
-    "aguardando_resposta",
+    # Duas direções, não uma: "quem deve o próximo e-mail" muda a ação.
+    "aguardando_minha_resposta",       # terceiro escreveu, eu não respondi
+    "aguardando_resposta_de_terceiro",  # eu escrevi, ninguém respondeu
     "followup_sem_acao",
     "revisar",
     "importante_p0",

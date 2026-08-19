@@ -97,23 +97,31 @@ def _ollama_call(
     )
 
 
+JSON_MODE_OFF = {"", "off", "none", "disabled"}
+
+
 def _openai_compatible_call(
     prompt: str, *, base_url: str, api_token: str, model: str,
-    temperature: float, timeout: float,
+    temperature: float, timeout: float, json_mode: str = "json_object",
 ) -> tuple[str, int | None, int | None]:
     headers = {"Authorization": f"Bearer {api_token}"} if api_token else {}
     root = base_url.rstrip("/")
     api_root = root if root.endswith("/v1") else f"{root}/v1"
+    payload: dict = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "stream": False,
+    }
+    # Servidores locais divergem aqui: LM Studio devolve 400 para `json_object` e
+    # exige `json_schema` ou `text`. `parse_json_response` já tolera texto ao
+    # redor, então omitir o campo é degradação segura.
+    if json_mode.strip().lower() not in JSON_MODE_OFF:
+        payload["response_format"] = {"type": json_mode.strip().lower()}
     response = httpx.post(
         f"{api_root}/chat/completions",
         headers=headers,
-        json={
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "response_format": {"type": "json_object"},
-            "temperature": temperature,
-            "stream": False,
-        },
+        json=payload,
         timeout=timeout,
     )
     response.raise_for_status()
@@ -166,6 +174,7 @@ def generate_json(
             raw, input_tokens, output_tokens = _openai_compatible_call(
                 prompt, base_url=settings.llm_base_url, api_token=settings.llm_api_token,
                 model=model, temperature=temperature, timeout=timeout,
+                json_mode=getattr(settings, "llm_json_mode", "json_object"),
             )
         else:
             raise ValueError(f"LLM_PROVIDER não suportado: {provider}")

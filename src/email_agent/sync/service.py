@@ -87,6 +87,51 @@ def sync_one_account(
     return {"new_messages": len(new_ids), "classified": classified, "errors": errors}
 
 
+def sync_sent_account(
+    account_id: int,
+    provider: str,
+    since_days: int | None = None,
+    limit: int | None = None,
+    classify: bool = False,
+) -> dict:
+    """Carrega a caixa de envio de uma conta. Sem triagem, o pipeline não roda e
+    nada é escrito no provedor."""
+    if provider == "gmail_api":
+        from email_agent.sync.gmail_sync import sync_sent
+    else:
+        from email_agent.sync.imap_sync import sync_sent
+    new_ids = sync_sent(account_id, since_days=since_days, limit=limit)
+    result = {"new_messages": len(new_ids)}
+    if classify:
+        classified, errors = _classify_many(new_ids)
+        result |= {"classified": classified, "errors": errors}
+    return result
+
+
+def sync_sent_all_accounts(
+    since_days: int | None = None, limit: int | None = None, classify: bool = False
+) -> dict:
+    """Varre a caixa de envio de todas as contas ativas; falha de uma não para as outras."""
+    with db_session() as session:
+        accounts = list(
+            session.execute(
+                select(EmailAccount).where(EmailAccount.is_active.is_(True))
+            ).scalars()
+        )
+        plan = [(a.id, a.provider, a.email_address) for a in accounts]
+
+    results = {}
+    for account_id, provider, email_address in plan:
+        try:
+            results[email_address] = sync_sent_account(
+                account_id, provider, since_days=since_days, limit=limit, classify=classify
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("account_sent_sync_failed", account=email_address, error=str(exc))
+            results[email_address] = {"error": str(exc)}
+    return results
+
+
 def sync_all_accounts(bootstrap: bool = False, limit: int | None = None) -> dict:
     """Sincroniza contas em sequência; a falha de uma nunca interrompe as outras."""
     with db_session() as session:

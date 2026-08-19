@@ -55,6 +55,11 @@ LLM_MODEL=gpt-5-mini
 LLM_MAX_CONCURRENCY=6
 ```
 
+`LLM_JSON_MODE` controla o `response_format` pedido ao provider
+OpenAI-compatible: `json_object` (padrão, OpenAI), `text` ou `off` para omitir
+o campo. **LM Studio recusa `json_object` com HTTP 400** e exige `json_schema`
+ou `text`; use `off`. Não afeta Ollama, que usa `format: json`.
+
 Use `LLM_PROVIDER=disabled` para rodar sem inferência. Nesse caso, mensagens
 novas falham de forma conservadora para Revisar. Providers externos recebem o
 trecho do e-mail usado no prompt; Ollama local não envia esse conteúdo por si.
@@ -97,6 +102,71 @@ npm install
 npm run build:css
 ```
 
+## Catálogo de respostas
+
+Base para compor respostas no estilo do usuário. São duas etapas separadas de
+propósito: a carga é lenta e vai à rede, a montagem é barata e será reajustada
+várias vezes enquanto a heurística de pareamento evolui.
+
+```bash
+# 1. carga: varre as pastas de envio e persiste; não classifica, não age no provedor
+docker compose exec email-helper-app agent sync sent --no-classify
+
+# 2. medição e export
+docker compose exec email-helper-app agent corpus stats
+docker compose exec email-helper-app agent corpus build
+```
+
+`sync sent` ignora o cursor incremental — é justamente o `last_uid` que impede
+alcançar mensagens antigas — e no IMAP varre **todas** as pastas de envio
+(`Sent`, `Sent Items`, `INBOX.Enviados`, arquivos por ano), não só a primeira que
+`discover_folders` encontra. UIDs já persistidos não são rebaixados. No Gmail a
+busca é `in:sent` sem janela e o cursor `_gmail_history` não é tocado, então o
+sync incremental segue intacto. `--classify` existe, mas o padrão é não
+classificar: o catálogo não usa categoria e a triagem custa ~45s por mensagem.
+
+`corpus build` monta pares (mensagem recebida → resposta escrita) com duas
+regras que decidem a qualidade do dataset:
+
+- o contexto só inclui mensagens **anteriores** à resposta. Incluir as
+  posteriores colocaria a própria resposta dentro do enunciado do exemplo;
+- quando o original não está no banco — IMAP só sincroniza INBOX/spam/sent/trash,
+  então recebidas arquivadas faltam — o trecho citado dentro da própria resposta
+  vira a mensagem recebida.
+
+Cada exemplo traz `self_overlap`: o corte por data garante que o contexto só tem
+mensagens anteriores, mas reenvios e templates reaproveitados fazem parte da
+resposta já aparecer ali por repetição legítima. Uma métrica de otimização deve
+excluir esses exemplos; o catálogo marca em vez de descartar.
+
+O JSONL contém corpo de e-mail e é gravado em `data/exports/`, ignorado pelo Git.
+
+## Cartão de estilo
+
+Destila do catálogo como você escreve, para servir de contexto fixo na composição.
+É trabalho offline e pesado, então roda no serviço `email-helper-compose`, que só
+existe sob o profile `compose` e aponta para o modelo forte do LM Studio enquanto
+a triagem segue no modelo pequeno do Ollama:
+
+```bash
+docker compose run --rm email-helper-compose corpus style-card
+```
+
+Um cartão por conta com pelo menos 30 exemplos, mais um cartão `_global` que
+agrega tudo e serve de fallback. Saem em `data/style/*.md`, ignorados pelo Git
+porque são inferências sobre correspondência privada.
+
+O cartão tem duas camadas de propósito: os números (comprimento, % de saudação,
+% de fecho) são **medidos em Python**, porque não se pergunta ao modelo o que uma
+contagem resolve com exatidão; só os traços qualitativos vêm da LLM, em map-reduce
+sobre lotes. O Markdown é feito para ser **corrigido à mão** — é essa propriedade
+que justifica o cartão existir em vez de um prompt otimizado opaco.
+
+Custo medido com `gemma-4-26b-a4b-qat`: ~90s por chamada, praticamente
+independente do tamanho do lote. Por isso o default é 40 exemplos por chamada;
+lote menor só multiplica chamadas. A rodada completa das contas atuais leva
+~45 min e não faz nenhuma escrita nos provedores.
+
 ## PostgreSQL e busca
 
 A busca usa duas estratégias complementares, sem outro serviço:
@@ -131,6 +201,7 @@ docker compose exec email-helper-app agent run --send
 
 docker compose exec email-helper-app agent sync all
 docker compose exec email-helper-app agent sync all --bootstrap
+docker compose exec email-helper-app agent sync sent --no-classify
 docker compose exec email-helper-app agent relabel all
 docker compose exec email-helper-app agent digest
 docker compose exec email-helper-app agent show E-YYYYMMDD-NNNNNN

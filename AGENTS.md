@@ -17,6 +17,14 @@ Operação: [README.md](README.md).
   autogenerate do Alembic). Migrations em `migrations/`.
 - Contas declaradas em `secrets/accounts.yml` (ver `secrets/accounts.example.yml`);
   importadas com `agent accounts import-yaml`.
+- `corpus/` — catálogo de respostas (pares recebida → resposta) derivado do que o
+  sync já persistiu. Fora do pipeline: não chama LLM nem age no provedor. Carga
+  pela varredura `agent sync sent`, montagem/export por `agent corpus`.
+- Trabalho offline de LLM (cartão de estilo, futura otimização DSPy) roda no serviço
+  `email-helper-compose`, que existe só sob `profiles: ["compose"]` e aponta para um
+  modelo forte. `compose.override.yml` seria carregado automaticamente em todo `up` —
+  não use esse nome para trabalho sob demanda. Os serviços compartilham a tag
+  `email-helper-app:local`; sem ela o `run` reconstrói a imagem.
 - Regras de importância por conta em `secrets/rules.yml` (descrição pt-BR + outcome),
   importadas com `agent rules import-yaml`, avaliadas pelo nó `apply_rules` do grafo
   via LLM (uma chamada adicional por e-mail quando a conta tem regras). Tabela `email_rule`.
@@ -64,9 +72,11 @@ Operação: [README.md](README.md).
   `port`/`starttls`/`ssl` são configuráveis por conta em `accounts.yml`.
 - Evolution API é **v2**: payload plano `{"number", "text"}`, header `apikey`. Não regredir para
   o formato v1 `textMessage`.
-- LLM: `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_TOKEN`, `LLM_MODEL` e
-  `LLM_MAX_CONCURRENCY` são o único contrato
-  de configuração. `generate_json()` retorna `LLMCallResult`; chamadas devem tratar erro
+- LLM: `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_TOKEN`, `LLM_MODEL`,
+  `LLM_MAX_CONCURRENCY` e `LLM_JSON_MODE` são o único contrato
+  de configuração. `LLM_JSON_MODE` existe porque servidores OpenAI-compatible
+  divergem no `response_format`: LM Studio devolve 400 para `json_object` e exige
+  `json_schema` ou `text`; `off` omite o campo e `parse_json_response` cobre. `generate_json()` retorna `LLMCallResult`; chamadas devem tratar erro
   conservadoramente. A triagem persiste provider, modelo, versão do prompt, JSON bruto,
   latência, tokens e erro em `email_classification`. Detalhes em
   [docs/MODELOS.md](docs/MODELOS.md).
@@ -96,6 +106,10 @@ Toda mudança em `models/entities.py` exige migration:
 
 Novos comportamentos de triagem devem ganhar teste em `tests/test_triage.py`.
 Endpoints e ações da web devem ganhar teste em `tests/test_api_cleanup.py`.
+Mudanças no pareamento do catálogo devem ganhar teste em `tests/test_corpus_builder.py`
+— em especial o corte que impede a resposta de vazar para o contexto do exemplo.
+O cartão de estilo tem teste em `tests/test_style_card.py`; os números do cartão são
+medidos em Python, nunca pedidos à LLM.
 Ao alterar classes Tailwind em `web/`, rodar `npm run build:css` e versionar o CSS.
 Rodar a suíte inteira antes de concluir.
 

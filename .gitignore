@@ -21,8 +21,15 @@ htmlcov/
 # Dados gerados
 *.log
 node_modules/
+# Exports carregam corpo de e-mail; só a pasta é versionada.
+data/exports/*
+!data/exports/.gitkeep
+# Pasta local de trabalho; nada da aplicação escreve nela.
+output/
 
 # macOS / IDE
 .DS_Store
 .idea/
 .vscode/
+# Cartões de estilo: inferências sobre correspondência privada.
+data/style/

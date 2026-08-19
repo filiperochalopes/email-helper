@@ -105,7 +105,10 @@ def build_digest(for_date: date | None = None) -> Digest:
                 latest[m.id] = (m, c)
         rows = sorted(latest.values(), key=lambda mc: -(mc[1].importance_score or 0))
 
-        waiting = [(m, c) for m, c in rows if c.category == "aguardando_resposta"][:MAX_WAITING]
+        waiting = [
+            (m, c) for m, c in rows
+            if c.category == "aguardando_resposta_de_terceiro"
+        ][:MAX_WAITING]
         waiting_ids = {m.id for m, _ in waiting}
         p0 = [(m, c) for m, c in rows if c.priority == "P0" and m.id not in waiting_ids]
         p1 = [(m, c) for m, c in rows if c.priority == "P1" and m.id not in waiting_ids]

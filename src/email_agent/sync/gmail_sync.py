@@ -20,6 +20,7 @@ from email_agent.sync.persist import persist_message
 log = get_logger(__name__)
 
 MONITORED_QUERY = "in:inbox OR in:spam OR in:sent"
+SENT_QUERY = "in:sent"
 CURSOR_MAILBOX = "_gmail_history"
 
 
@@ -100,9 +101,7 @@ def _changed_ids_from_history(service, start_history_id: str) -> tuple[list[str]
     return list(ids), new_history_id
 
 
-def _ids_from_search(service, days: int) -> tuple[list[str], str | None]:
-    after = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y/%m/%d")
-    query = f"({MONITORED_QUERY}) after:{after}"
+def _ids_from_query(service, query: str) -> list[str]:
     ids: list[str] = []
     page_token = None
     while True:
@@ -117,8 +116,40 @@ def _ids_from_search(service, days: int) -> tuple[list[str], str | None]:
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
+    return ids
+
+
+def _ids_from_search(service, days: int) -> tuple[list[str], str | None]:
+    after = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y/%m/%d")
+    ids = _ids_from_query(service, f"({MONITORED_QUERY}) after:{after}")
     profile = service.users().getProfile(userId="me").execute()
     return ids, profile.get("historyId")
+
+
+def sync_sent(
+    account_id: int, since_days: int | None = None, limit: int | None = None
+) -> list[int]:
+    """Varredura da caixa de envio inteira, sem janela padrão e sem cursor.
+
+    Carrega o catálogo de respostas. Não escreve em `_gmail_history`: o sync
+    incremental continua com o cursor dele intacto. Mensagens já persistidas
+    são puladas por `_fetch_and_persist`.
+    """
+    with db_session() as session:
+        account = session.get(EmailAccount, account_id)
+    service = get_service(account)
+
+    query = SENT_QUERY
+    if since_days:
+        after = (datetime.now(UTC) - timedelta(days=since_days)).strftime("%Y/%m/%d")
+        query = f"{query} after:{after}"
+
+    message_ids = _ids_from_query(service, query)
+    log.info(
+        "gmail_sent_sweep", account=account.email_address, found=len(message_ids), query=query
+    )
+    new_db_ids, _fully_scanned = _fetch_and_persist(service, account, message_ids, limit=limit)
+    return new_db_ids
 
 
 def _fetch_and_persist(

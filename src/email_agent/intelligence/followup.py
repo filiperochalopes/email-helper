@@ -1,11 +1,18 @@
-"""Detecção de follow-up: mensagem enviada pelo usuário aguardando resposta.
+"""Quem deve o próximo e-mail nesta conversa.
 
-Analisa a thread: se a última mensagem é do usuário, contém pergunta/solicitação
-e não houve resposta posterior de terceiros, marca aguardando_resposta.
+Duas direções, deliberadamente separadas:
+
+- `detect_followup_waiting_response`: o usuário escreveu e ninguém respondeu —
+  é cobrança dele para fora;
+- `detect_awaiting_my_reply`: um terceiro escreveu e o usuário ainda não
+  respondeu — é o alvo da composição de rascunhos.
+
+Ambas respondem só ao fato objetivo "já houve resposta posterior?". Se a mensagem
+*merece* resposta é juízo da LLM, feito na triagem.
 """
 import re
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from email_agent.models import EmailAccount, EmailMessage
@@ -42,3 +49,34 @@ def detect_followup_waiting_response(session: Session, message: EmailMessage) ->
             return False, None
 
     return True, "mensagem enviada com pergunta/solicitação e sem resposta posterior na thread"
+
+
+def detect_awaiting_my_reply(session: Session, message: EmailMessage) -> tuple[bool, str | None]:
+    """Terceiro escreveu e não há resposta minha posterior na thread.
+
+    Não julga se a mensagem pede resposta — quem julga é a triagem. Aqui só se
+    verifica o fato, que é o que a LLM não tem como saber sozinha.
+    """
+    if message.is_sent_by_user or message.date is None:
+        return False, None
+    if not message.provider_thread_id:
+        return False, None
+
+    account = session.get(EmailAccount, message.account_id)
+    own_address = (account.email_address if account else "").lower()
+
+    mine_later = session.execute(
+        select(EmailMessage).where(
+            EmailMessage.account_id == message.account_id,
+            EmailMessage.provider_thread_id == message.provider_thread_id,
+            EmailMessage.date > message.date,
+            or_(
+                EmailMessage.is_sent_by_user.is_(True),
+                EmailMessage.from_email == own_address,
+            ),
+        )
+    ).first()
+    if mine_later:
+        return False, None
+
+    return True, "mensagem de terceiro sem resposta minha posterior na thread"

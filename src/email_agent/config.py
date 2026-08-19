@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     llm_api_token: str = ""
     llm_model: str = "qwen3:8b"
     llm_max_concurrency: int = 1
+    # Formato pedido ao provider OpenAI-compatible: `json_object` (padrão, OpenAI),
+    # `text` ou `off` para omitir o campo. LM Studio recusa `json_object` — só
+    # aceita `json_schema` ou `text`. Não afeta Ollama, que usa `format: json`.
+    llm_json_mode: str = "json_object"
 
     default_sync_since_days: int = 365
     max_email_text_chars: int = 12000

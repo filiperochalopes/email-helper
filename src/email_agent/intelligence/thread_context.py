@@ -25,14 +25,27 @@ class ThreadContext:
     current_date: str
 
 
-def _without_quoted_reply(text: str) -> str:
-    lines: list[str] = []
-    for line in (text or "").splitlines():
+def split_quoted_reply(text: str) -> tuple[str, str]:
+    """Separa o que foi escrito agora do trecho citado da mensagem anterior.
+
+    A triagem descarta a citação (ruído); o catálogo de respostas usa justamente
+    ela para recuperar a mensagem recebida quando o original não está no banco.
+    """
+    lines = (text or "").splitlines()
+    for index, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith(">") or _QUOTED_HEADER.match(stripped):
-            break
-        lines.append(line)
-    return "\n".join(lines).strip()
+            own = "\n".join(lines[:index]).strip()
+            return own, _strip_quote_markers("\n".join(lines[index:]))
+    return "\n".join(lines).strip(), ""
+
+
+def _strip_quote_markers(text: str) -> str:
+    return "\n".join(re.sub(r"^\s*>+ ?", "", line) for line in text.splitlines()).strip()
+
+
+def _without_quoted_reply(text: str) -> str:
+    return split_quoted_reply(text)[0]
 
 
 def _direction(message: EmailMessage) -> str:

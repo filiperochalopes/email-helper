@@ -4,9 +4,9 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from email_agent.config import get_settings
-from email_agent.connectors.imap_client import connect, discover_folders
+from email_agent.connectors.imap_client import connect, discover_folders, discover_sent_folders
 from email_agent.logging_setup import get_logger
-from email_agent.models import EmailAccount, MailboxCursor, db_session
+from email_agent.models import EmailAccount, EmailMessage, MailboxCursor, db_session
 from email_agent.parsing.mime_parser import parse_mime_bytes
 from email_agent.sync.persist import persist_message
 
@@ -111,6 +111,23 @@ def _sync_folder(
     if limit is not None:
         uids = uids[:limit]
 
+    new_ids += _fetch_uids(client, account, role, folder, uidvalidity, uids, settings)
+
+    with db_session() as session:
+        cursor = _get_cursor(session, account.id, folder)
+        cursor.last_uid = max(uids)
+        cursor.last_sync_at = datetime.now(UTC)
+        cursor.sync_status = "ok"
+
+    log.info("imap_folder_synced", account=account.email_address, folder=folder, new=len(new_ids))
+    return new_ids
+
+
+def _fetch_uids(
+    client, account, role: str, folder: str, uidvalidity, uids: list[int], settings
+) -> list[int]:
+    """Baixa e persiste os UIDs em lotes. Retorna os ids (banco) das novas."""
+    new_ids: list[int] = []
     for batch_start in range(0, len(uids), 50):
         batch = uids[batch_start : batch_start + 50]
         response = client.fetch(batch, ["BODY.PEEK[]", "FLAGS"])
@@ -136,12 +153,88 @@ def _sync_folder(
                 )
                 if is_new:
                     new_ids.append(msg.id)
+    return new_ids
 
+
+def _known_uids(account_id: int, folder: str, uidvalidity) -> set[int]:
+    """UIDs da pasta já persistidos, para a varredura não rebaixar corpo à toa."""
+    prefix = f"{folder}:{uidvalidity}:"
+    known: set[int] = set()
     with db_session() as session:
-        cursor = _get_cursor(session, account.id, folder)
-        cursor.last_uid = max(uids)
-        cursor.last_sync_at = datetime.now(UTC)
-        cursor.sync_status = "ok"
+        values = session.execute(
+            select(EmailMessage.provider_message_id).where(
+                EmailMessage.account_id == account_id,
+                EmailMessage.provider_message_id.startswith(prefix, autoescape=True),
+            )
+        ).scalars()
+        for value in values:
+            try:
+                known.add(int(value.rsplit(":", 1)[1]))
+            except (IndexError, ValueError):  # formato antigo/inesperado: rebaixa
+                continue
+    return known
 
-    log.info("imap_folder_synced", account=account.email_address, folder=folder, new=len(new_ids))
+
+def sync_sent(
+    account_id: int, since_days: int | None = None, limit: int | None = None
+) -> list[int]:
+    """Varre TODAS as pastas de envio, ignorando o cursor incremental.
+
+    Carrega o catálogo de respostas. Diferente de `sync_account`, não lê nem
+    grava `MailboxCursor` — o `last_uid` do sync incremental é justamente o que
+    impediria de alcançar mensagens antigas.
+    """
+    settings = get_settings()
+    with db_session() as session:
+        account = session.get(EmailAccount, account_id)
+
+    try:
+        client = connect(account)
+    except Exception as exc:  # noqa: BLE001 — falha numa conta não pode derrubar as outras
+        log.error("imap_connect_failed", account=account.email_address, error=str(exc))
+        return []
+
+    new_ids: list[int] = []
+    with client:
+        folders = discover_sent_folders(client)
+        if not folders:
+            log.warning("imap_sent_folders_not_found", account=account.email_address)
+        for folder in folders:
+            remaining = None if limit is None else limit - len(new_ids)
+            if remaining is not None and remaining <= 0:
+                break
+            try:
+                new_ids += _sweep_sent_folder(
+                    client, account, folder, since_days, settings, limit=remaining
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "imap_sent_sweep_failed",
+                    account=account.email_address, folder=folder, error=str(exc),
+                )
+    return new_ids
+
+
+def _sweep_sent_folder(
+    client, account, folder: str, since_days: int | None, settings, limit: int | None = None
+) -> list[int]:
+    info = client.select_folder(folder, readonly=True)
+    uidvalidity = info.get(b"UIDVALIDITY")
+
+    if since_days is None:
+        uids = client.search(["ALL"])
+    else:
+        since = datetime.now(UTC) - timedelta(days=since_days)
+        uids = client.search(["SINCE", since.date()])
+
+    known = _known_uids(account.id, folder, uidvalidity)
+    uids = [uid for uid in uids if uid not in known]
+    if limit is not None:
+        uids = uids[:limit]
+
+    new_ids = _fetch_uids(client, account, "sent", folder, uidvalidity, uids, settings)
+    log.info(
+        "imap_sent_folder_swept",
+        account=account.email_address, folder=folder, fetched=len(uids), new=len(new_ids),
+    )
     return new_ids
