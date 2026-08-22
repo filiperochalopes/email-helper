@@ -159,13 +159,16 @@ button { cursor: pointer; }
 .action-bar button, .modal-actions button { padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-muted); font-size: 11px; font-weight: 600; }.action-bar .danger, .modal-actions .danger { border-color: var(--danger); background: var(--danger); color: white; }
 .modal { position: fixed; z-index: 90; inset: 0; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / .48); }.modal-card { width: min(420px, 100%); padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); box-shadow: var(--shadow); }
 .modal-card h2 { margin: 0; font-size: 17px; }.modal-card > p { margin: 8px 0; color: var(--text-soft); font-size: 12px; line-height: 1.5; }.modal-card .modal-note { padding: 8px; border-radius: 6px; background: var(--surface-muted); font-size: 10px; }.modal-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 16px; }.modal-actions .primary { background: var(--text); color: var(--surface); }
-.toast { position: fixed; z-index: 100; right: 18px; bottom: 18px; max-width: min(400px, calc(100vw - 36px)); padding: 11px 14px 11px 40px; border: 1px solid currentColor; border-radius: 9px; background: var(--surface-raised); box-shadow: var(--shadow); color: var(--info); font-size: 12px; font-weight: 600; line-height: 1.45; transition: bottom .18s ease; }
+.toast-region { position: fixed; z-index: 100; bottom: 18px; left: 50%; display: grid; justify-items: center; gap: 8px; width: min(440px, calc(100vw - 36px)); pointer-events: none; transform: translateX(-50%); transition: bottom .18s ease; }
+.toast { position: relative; width: max-content; max-width: 100%; padding: 11px 14px 11px 40px; border: 1px solid currentColor; border-radius: 9px; background: var(--surface-raised); box-shadow: var(--shadow); color: var(--info); font-size: 12px; font-weight: 600; line-height: 1.45; pointer-events: auto; }
 .toast::before { content: "i"; position: absolute; top: 50%; left: 13px; display: grid; place-items: center; width: 18px; height: 18px; border: 1px solid currentColor; border-radius: 50%; font-size: 11px; font-weight: 800; transform: translateY(-50%); }
+.toast.is-loading::before { content: ""; box-sizing: border-box; border-width: 2px; border-right-color: transparent; animation: toast-spin .7s linear infinite; }
+@keyframes toast-spin { to { transform: translateY(-50%) rotate(360deg); } }
 .toast.is-info { background: color-mix(in srgb, var(--info) 11%, var(--surface-raised)); color: var(--info); }
 .toast.is-success { background: color-mix(in srgb, var(--success) 11%, var(--surface-raised)); color: var(--success); }.toast.is-success::before { content: "✓"; }
 .toast.is-warning { background: color-mix(in srgb, var(--warning) 13%, var(--surface-raised)); color: var(--warning); }.toast.is-warning::before { content: "!"; }
 .toast.is-error { background: color-mix(in srgb, var(--error) 11%, var(--surface-raised)); color: var(--error); }.toast.is-error::before { content: "×"; }
-body:has(.action-bar:not(.is-hidden)) .toast { bottom: 70px; }
+body:has(.action-bar:not(.is-hidden)) .toast-region { bottom: 70px; }
 
 @media (max-width: 800px) {
   body { overflow: auto; }.app-shell { grid-template-rows: 52px auto minmax(0, 1fr); }

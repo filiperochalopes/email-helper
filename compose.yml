@@ -52,6 +52,22 @@ services:
     entrypoint: ["agent"]
     command: ["--help"]
 
+  # Composição de rascunhos: modelo médio no Ollama. Separado do serviço de
+  # extração porque a tarefa é outra e o modelo é outro — deixar explícito no
+  # compose evita depender de `-e` na linha de comando.
+  email-helper-draft:
+    <<: *app-common
+    profiles: ["compose"]
+    restart: "no"
+    environment:
+      <<: *app-env
+      LLM_PROVIDER: ollama
+      LLM_BASE_URL: http://host.docker.internal:11434
+      LLM_MODEL: gemma4:e4b-mlx
+      LLM_MAX_CONCURRENCY: "1"
+    entrypoint: ["agent"]
+    command: ["--help"]
+
   email-helper-db:
     image: postgres:16
     restart: unless-stopped

@@ -1,8 +1,10 @@
 const state = {
   page: 1, mode: "all", query: "", account: "", category: "", priority: "",
   datePreset: "", dateFrom: "", dateTo: "", sort: "newest", hasMore: false, loading: false,
+  loadController: null, loadVersion: 0,
   selected: new Set(), items: new Map(), activeId: null, contextId: null,
-  pendingAction: null, pendingIds: [], lastSelectedId: null, lastRenderedGroup: null,
+  pendingAction: null, pendingIds: [], pendingIsBulk: false,
+  lastSelectedId: null, lastRenderedGroup: null,
 };
 const MAX_SELECTION = 200;
 const $ = (selector) => document.querySelector(selector);
@@ -20,7 +22,7 @@ const els = {
   readerMeta: $("#reader-meta"), readerDate: $("#reader-date"), readerTags: $("#reader-tags"),
   readerCleanup: $("#reader-cleanup"), readerBody: $("#reader-body"), contextMenu: $("#context-menu"),
   modal: $("#confirm-modal"), modalTitle: $("#modal-title"), modalCopy: $("#modal-copy"),
-  modalConfirm: $("#modal-confirm"), toast: $("#toast"), theme: $("#theme-toggle"),
+  modalConfirm: $("#modal-confirm"), toastRegion: $("#toast-region"), theme: $("#theme-toggle"),
   listTitle: $("#list-title-label"),
 };
 
@@ -163,7 +165,7 @@ function updateModeTabs() {
 }
 
 function populateAccounts(accounts) {
-  const current = els.account.value;
+  const current = state.account;
   const known = new Set([...els.account.options].map((option) => option.value));
   accounts.forEach((account) => {
     if (!known.has(account)) els.account.add(new Option(account, account));
@@ -184,19 +186,63 @@ function listParams({ includeMode = true } = {}) {
   return params;
 }
 
-async function loadMessages({ reset = false } = {}) {
-  if (state.loading || (!reset && !state.hasMore && state.page > 1)) return;
+const validModes = new Set(["all", "trash", "archive"]);
+const validSorts = new Set(Object.keys(sortLabels));
+const validPriorities = new Set(["P0", "P1", "P2", "ignore"]);
+const validDatePresets = new Set(["today", "yesterday", "last7", "last30", "custom"]);
+
+function readStateFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const mode = params.get("mode"); const sort = params.get("sort");
+  const priority = params.get("priority"); const datePreset = params.get("date_preset");
+  state.mode = validModes.has(mode) ? mode : "all";
+  state.sort = validSorts.has(sort) ? sort : "newest";
+  state.priority = validPriorities.has(priority) ? priority : "";
+  state.datePreset = validDatePresets.has(datePreset) ? datePreset : "";
+  state.query = (params.get("query") || "").slice(0, 300);
+  state.account = (params.get("account") || "").slice(0, 320);
+  state.category = (params.get("category") || "").slice(0, 40);
+  state.dateFrom = params.get("date_from") || "";
+  state.dateTo = params.get("date_to") || "";
+}
+
+function applyStateToControls() {
+  els.search.value = state.query; els.account.value = state.account;
+  els.category.value = state.category;
+  els.priority.value = state.priority; els.datePreset.value = state.datePreset;
+  els.dateFrom.value = state.dateFrom; els.dateTo.value = state.dateTo;
+  els.dateRange.classList.toggle("hidden", state.datePreset !== "custom");
+  els.sortLabel.textContent = sortLabels[state.sort];
+  els.sortPanel.querySelectorAll("[data-sort]").forEach((item) => {
+    item.classList.toggle("is-active", item.dataset.sort === state.sort);
+  });
+}
+
+function syncUrl() {
+  const params = listParams();
+  if (state.datePreset) params.set("date_preset", state.datePreset);
+  const query = params.toString();
+  const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+  window.history.replaceState(null, "", nextUrl);
+}
+
+async function loadMessages({ reset = false, preserveSelection = false } = {}) {
+  if (reset && state.loadController) state.loadController.abort();
+  if (!reset && (state.loading || (!state.hasMore && state.page > 1))) return;
   if (reset) {
-    state.page = 1; state.hasMore = false; state.items.clear(); state.selected.clear();
+    state.page = 1; state.hasMore = false; state.items.clear();
+    if (!preserveSelection) state.selected.clear();
     state.lastSelectedId = null; state.lastRenderedGroup = null; state.activeId = null; els.list.innerHTML = "";
     els.loading.classList.remove("hidden"); els.empty.classList.add("hidden"); clearReader(); updateSelectionUI();
   }
   state.loading = true;
+  const loadVersion = ++state.loadVersion;
+  const controller = new AbortController(); state.loadController = controller;
   els.results.setAttribute("aria-busy", "true");
   const params = listParams();
   params.set("page", String(state.page)); params.set("page_size", "40");
   try {
-    const response = await fetch(`/api/cleanup/messages?${params}`);
+    const response = await fetch(`/api/cleanup/messages?${params}`, { signal: controller.signal });
     if (!response.ok) throw new Error(`Falha ao carregar (${response.status})`);
     const payload = await response.json();
     els.loading.classList.add("hidden");
@@ -215,8 +261,13 @@ async function loadMessages({ reset = false } = {}) {
     els.loadMore.classList.toggle("hidden", !state.hasMore);
     els.empty.classList.toggle("hidden", state.items.size !== 0);
     updateSelectionUI();
-  } catch (error) { showToast(error.message, "error"); }
-  finally { state.loading = false; els.results.setAttribute("aria-busy", "false"); }
+  } catch (error) { if (error.name !== "AbortError") showToast(error.message, "error"); }
+  finally {
+    if (loadVersion === state.loadVersion) {
+      state.loading = false; state.loadController = null;
+      els.results.setAttribute("aria-busy", "false");
+    }
+  }
 }
 
 function clearReader() {
@@ -351,7 +402,7 @@ els.contextMenu.addEventListener("click", (event) => {
   if (actionButton) {
     const id = state.contextId;
     hideContextMenu();
-    if (id) openConfirmation(actionButton.dataset.contextAction, [id]);
+    if (id) openConfirmation(actionButton.dataset.contextAction, [id], { isBulk: false });
     return;
   }
   const blacklistButton = event.target.closest("[data-blacklist]");
@@ -365,7 +416,10 @@ document.addEventListener("click", (event) => {
 window.addEventListener("resize", hideContextMenu);
 $("#reader-back").addEventListener("click", () => els.reader.classList.remove("mobile-open"));
 
-function resetAndLoad() { loadMessages({ reset: true }); }
+function resetAndLoad({ preserveSelection = false, updateUrl = true } = {}) {
+  if (updateUrl) syncUrl();
+  return loadMessages({ reset: true, preserveSelection });
+}
 let searchTimer;
 els.search.addEventListener("input", () => {
   clearTimeout(searchTimer);
@@ -457,15 +511,19 @@ new IntersectionObserver(([entry]) => {
   if (entry.isIntersecting && state.hasMore && !state.loading) loadMessages();
 }, { root: els.results, rootMargin: "300px" }).observe(els.sentinel);
 
-document.querySelectorAll(".bulk-trigger").forEach((button) => button.addEventListener("click", () => openConfirmation(button.dataset.action, [...state.selected])));
-function openConfirmation(action, ids) {
-  state.pendingAction = action; state.pendingIds = ids; const count = ids.length; const trash = action === "trash";
+document.querySelectorAll(".bulk-trigger").forEach((button) => button.addEventListener("click", () => openConfirmation(button.dataset.action, [...state.selected], { isBulk: true })));
+function openConfirmation(action, ids, { isBulk }) {
+  state.pendingAction = action; state.pendingIds = ids; state.pendingIsBulk = isBulk;
+  const count = ids.length; const trash = action === "trash";
   els.modalTitle.textContent = trash ? "Mover para a Lixeira?" : "Arquivar mensagens?";
   els.modalCopy.textContent = trash ? `${count} mensagem(ns) serão movidas para a Lixeira recuperável.` : `${count} mensagem(ns) sairão da Inbox e irão para o arquivo nativo.`;
   els.modalConfirm.textContent = trash ? "Mover à Lixeira" : "Arquivar";
   els.modalConfirm.classList.toggle("danger", trash); els.modal.classList.remove("hidden"); els.modalConfirm.focus();
 }
-function closeConfirmation() { state.pendingAction = null; state.pendingIds = []; els.modal.classList.add("hidden"); }
+function closeConfirmation() {
+  state.pendingAction = null; state.pendingIds = []; state.pendingIsBulk = false;
+  els.modal.classList.add("hidden");
+}
 $("#modal-cancel").addEventListener("click", closeConfirmation);
 els.modal.addEventListener("click", (event) => { if (event.target === els.modal) closeConfirmation(); });
 document.addEventListener("keydown", (event) => {
@@ -473,19 +531,25 @@ document.addEventListener("keydown", (event) => {
 });
 els.modalConfirm.addEventListener("click", async () => {
   if (!state.pendingAction || !state.pendingIds.length) return;
-  els.modalConfirm.disabled = true;
+  const action = state.pendingAction;
+  const ids = [...state.pendingIds];
+  const isBulk = state.pendingIsBulk;
+  const actionLabel = action === "trash" ? "Excluindo" : "Arquivando";
+  closeConfirmation();
+  const finishToast = showProgressToast(`${actionLabel} ${ids.length} mensagem(ns)…`);
   try {
-    const action = state.pendingAction;
-    const ids = [...state.pendingIds];
     const response = await fetch("/api/cleanup/bulk-action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ids, confirmed: true }) });
     const payload = await response.json(); if (!response.ok) throw new Error(payload.detail || "A ação falhou.");
-    closeConfirmation();
-    showToast(
+    if (isBulk) {
+      payload.results.filter((result) => result.success).forEach((result) => state.selected.delete(result.id));
+      updateSelectionUI();
+    }
+    finishToast(
       `${payload.succeeded} concluída(s)${payload.failed ? ` · ${payload.failed} falha(s)` : ""}`,
       payload.failed ? "warning" : "success",
     );
-    await resetAndLoad();
-  } catch (error) { showToast(error.message, "error"); } finally { els.modalConfirm.disabled = false; }
+    await resetAndLoad({ preserveSelection: true, updateUrl: false });
+  } catch (error) { finishToast(error.message, "error"); }
 });
 
 const themeOrder = ["system", "light", "dark"];
@@ -499,16 +563,37 @@ els.theme.addEventListener("click", () => {
   applyTheme(themeOrder[(themeOrder.indexOf(current) + 1) % themeOrder.length]);
 });
 
-let toastTimer;
-function showToast(message, type = "info") {
+function setToast(toast, message, type = "info", { loading = false } = {}) {
   const toastTypes = ["info", "success", "warning", "error"];
   const resolvedType = toastTypes.includes(type) ? type : "info";
-  clearTimeout(toastTimer); els.toast.textContent = message;
-  toastTypes.forEach((item) => els.toast.classList.toggle(`is-${item}`, item === resolvedType));
-  els.toast.setAttribute("role", resolvedType === "error" ? "alert" : "status");
-  els.toast.setAttribute("aria-live", resolvedType === "error" ? "assertive" : "polite");
-  els.toast.classList.remove("hidden"); toastTimer = setTimeout(() => els.toast.classList.add("hidden"), 5000);
+  toast.textContent = message;
+  toastTypes.forEach((item) => toast.classList.toggle(`is-${item}`, item === resolvedType));
+  toast.classList.toggle("is-loading", loading);
+  toast.setAttribute("role", resolvedType === "error" ? "alert" : "status");
 }
 
+function createToast(message, type = "info", { loading = false } = {}) {
+  const toast = document.createElement("div"); toast.className = "toast";
+  setToast(toast, message, type, { loading }); els.toastRegion.append(toast);
+  return toast;
+}
+
+function dismissToastLater(toast) { window.setTimeout(() => toast.remove(), 5000); }
+
+function showToast(message, type = "info") {
+  const toast = createToast(message, type); dismissToastLater(toast);
+}
+
+function showProgressToast(message) {
+  const toast = createToast(message, "info", { loading: true });
+  return (finalMessage, type) => { setToast(toast, finalMessage, type); dismissToastLater(toast); };
+}
+
+readStateFromUrl();
+applyStateToControls();
 applyTheme(localStorage.getItem("email-helper-theme") || "system");
-updateModeTabs(); updateFilterCount(); loadMessages({ reset: true });
+updateModeTabs(); updateFilterCount(); syncUrl(); loadMessages({ reset: true });
+window.addEventListener("popstate", () => {
+  readStateFromUrl(); applyStateToControls(); updateModeTabs(); updateFilterCount();
+  resetAndLoad({ updateUrl: false });
+});

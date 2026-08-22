@@ -15,6 +15,7 @@ from email_agent.models import (
     EmailClassification,
     EmailMessage,
     EmailUserEvent,
+    HumanReview,
     db_session,
 )
 
@@ -616,6 +617,136 @@ def corpus_style_card(
     from email_agent.intelligence.llm_client import flush_langfuse
 
     flush_langfuse()
+
+
+@app.command()
+def compose(
+    account: str = typer.Option(None, "--account", help="Só esta conta; padrão: todas."),
+    limit: int = typer.Option(None, "--limit", min=1, help="Máximo de rascunhos."),
+    style_dir: Path = typer.Option(Path("/data/style"), "--style-dir"),
+    force: bool = typer.Option(False, "--force", help="Refaz mesmo se já houver rascunho pendente."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Mostra sem gravar."),
+):
+    """Redige rascunhos de resposta para conversas que esperam sua resposta.
+
+    Um rascunho por conversa, no estilo do cartão da conta (fallback `_global`).
+    Grava em `human_review` para revisão; nunca escreve no provedor nem envia.
+    """
+    from email_agent.intelligence.composer import (
+        already_drafted,
+        compose_draft,
+        find_draft_targets,
+        persist_draft,
+    )
+
+    account_id = _account_by_email(account)[0] if account else None
+    with db_session() as session:
+        targets = find_draft_targets(session, account_id=account_id, limit=limit)
+        ids = [(m.id, m.email_agent_id) for m in targets]
+
+    if not ids:
+        console.print(
+            "[yellow]Nenhuma conversa aguardando sua resposta.[/yellow] "
+            "Rode a triagem antes: agent relabel all"
+        )
+        return
+
+    console.print(f"[bold]{len(ids)}[/bold] conversa(s) aguardando resposta.")
+    created = skipped = failed = 0
+    for message_id, agent_id in ids:
+        with db_session() as session:
+            if not force and already_drafted(session, message_id):
+                console.print(f"  [dim]{agent_id}: já tem rascunho pendente, pulando[/dim]")
+                skipped += 1
+                continue
+            message = session.get(EmailMessage, message_id)
+            draft = compose_draft(session, message, style_dir)
+
+            if draft.error or not draft.body.strip():
+                console.print(f"  [red]{agent_id}: falhou[/red] ({draft.error or 'corpo vazio'})")
+                failed += 1
+                continue
+            if not dry_run:
+                persist_draft(session, draft)
+            created += 1
+
+        confidence = f"{draft.confidence:.2f}" if draft.confidence is not None else "—"
+        console.print(
+            f"  [green]{agent_id}[/green] estilo={draft.style_card_source} "
+            f"confiança={confidence} pendências={len(draft.pending)} "
+            f"({len(draft.body)} chars)"
+        )
+        for item in draft.pending:
+            console.print(f"      [yellow]falta:[/yellow] {item}")
+
+    verb = "seriam gravados" if dry_run else "gravados"
+    console.print(
+        f"\n{created} rascunho(s) {verb} · {skipped} pulado(s) · {failed} falha(s)"
+    )
+    if not dry_run and created:
+        console.print("[dim]Revise antes de enviar: agent drafts list[/dim]")
+
+    from email_agent.intelligence.llm_client import flush_langfuse
+
+    flush_langfuse()
+
+
+@app.command("drafts")
+def drafts_list(
+    limit: int = typer.Option(20, "--limit", min=1),
+    show: str = typer.Option(None, "--show", help="Mostra o corpo do rascunho deste E-ID."),
+):
+    """Lista (ou mostra) os rascunhos pendentes de revisão."""
+    from email_agent.intelligence.composer import DRAFT_REVIEW_TYPE
+
+    with db_session() as session:
+        rows = session.execute(
+            select(HumanReview, EmailMessage)
+            .join(EmailMessage, EmailMessage.id == HumanReview.message_id)
+            .where(
+                HumanReview.review_type == DRAFT_REVIEW_TYPE,
+                HumanReview.status == "pending",
+            )
+            .order_by(HumanReview.id.desc())
+            .limit(limit)
+        ).all()
+
+        if show:
+            for review, message in rows:
+                if message.email_agent_id != show:
+                    continue
+                payload = review.proposed_action_json or {}
+                console.print(Panel(
+                    payload.get("body") or "(vazio)",
+                    title=f"{message.email_agent_id} · {payload.get('subject') or ''}",
+                    subtitle=(
+                        f"estilo={payload.get('style_card')} "
+                        f"modelo={payload.get('model')} "
+                        f"confiança={payload.get('confidence')}"
+                    ),
+                ))
+                for item in payload.get("pending") or []:
+                    console.print(f"  [yellow]falta:[/yellow] {item}")
+                return
+            console.print(f"[red]Rascunho pendente não encontrado:[/red] {show}")
+            raise typer.Exit(1)
+
+        t = Table(title="Rascunhos pendentes")
+        for col in ("E-ID", "Assunto", "Estilo", "Conf.", "Falta", "Chars"):
+            t.add_column(col)
+        for review, message in rows:
+            payload = review.proposed_action_json or {}
+            confidence = payload.get("confidence")
+            t.add_row(
+                message.email_agent_id,
+                (payload.get("subject") or "")[:44],
+                str(payload.get("style_card") or "—"),
+                f"{confidence:.2f}" if isinstance(confidence, (int, float)) else "—",
+                str(len(payload.get("pending") or [])),
+                str(len(payload.get("body") or "")),
+            )
+        console.print(t)
+        console.print("[dim]Ver um rascunho: agent drafts --show E-YYYYMMDD-NNNNNN[/dim]")
 
 
 @relabel_app.command("all")
